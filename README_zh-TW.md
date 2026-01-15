@@ -36,7 +36,10 @@ git clone https://github.com/kiki830621/che-apple-mail-mcp.git
 cd che-apple-mail-mcp
 swift build -c release
 
-# 複製到 ~/bin 並加入 Claude Code（user scope = 所有專案都可使用）
+# 複製到 ~/bin 並加入 Claude Code
+# --scope user    : 跨所有專案可用（存在 ~/.claude.json）
+# --transport stdio: 本地 binary 執行，透過 stdin/stdout
+# --              : 分隔 claude 選項和實際執行的命令
 mkdir -p ~/bin
 cp .build/release/CheAppleMailMCP ~/bin/
 claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheAppleMailMCP
@@ -236,7 +239,10 @@ swift build -c release
 #### Claude Code (CLI)
 
 ```bash
-# 複製到 ~/bin 並註冊（user scope = 所有專案都可使用）
+# 複製到 ~/bin 並註冊
+# --scope user    : 跨所有專案可用（存在 ~/.claude.json）
+# --transport stdio: 本地 binary 執行，透過 stdin/stdout
+# --              : 分隔 claude 選項和實際執行的命令
 mkdir -p ~/bin
 cp .build/release/CheAppleMailMCP ~/bin/
 claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheAppleMailMCP

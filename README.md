@@ -36,7 +36,10 @@ git clone https://github.com/kiki830621/che-apple-mail-mcp.git
 cd che-apple-mail-mcp
 swift build -c release
 
-# Copy to ~/bin and add to Claude Code (user scope = available in all projects)
+# Copy to ~/bin and add to Claude Code
+# --scope user    : available across all projects (stored in ~/.claude.json)
+# --transport stdio: local binary execution via stdin/stdout
+# --              : separator between claude options and the command
 mkdir -p ~/bin
 cp .build/release/CheAppleMailMCP ~/bin/
 claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheAppleMailMCP
