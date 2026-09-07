@@ -375,12 +375,12 @@ enum ComposeRefusal: Equatable {
                 + "the window — do not rename the file to ASCII, because the recipient sees "
                 + "that name."
         case .displayNameRecipient:
-            return "a recipient carries a display name (Name <addr>) that this path cannot "
-                + "fill. A mailto: URL carries addr-spec only (RFC 6068). The GUI can type a "
-                + "display name into `to`, but only when creating a DRAFT — on a send, a fill "
-                + "that failed would dispatch with missing recipients — and never into Cc/Bcc, "
-                + "which can be hidden via Header Fields (#277). Use bare addresses here, or "
-                + "create a draft (create_draft) where a `to` display name is supported."
+            return "a recipient carries a display name (Name <addr>) on a send. A mailto: URL "
+                + "carries addr-spec only (RFC 6068), so display names are filled through the "
+                + "compose window's GUI — and that fill is DRAFT-only: on a send, a fill that "
+                + "failed would dispatch with missing recipients (#277). Use bare addresses to "
+                + "send now, or create a draft (create_draft), where display names in to, cc "
+                + "and bcc are supported (#404), and send it from Mail after checking the recipients."
         }
     }
 }
@@ -410,6 +410,44 @@ func composeRefusal(
     // recipients), TO-only, and only when the caller marked the fill viable.
     if !recipientsAddrSpecOnly && !displayNameFillViable { return .displayNameRecipient }
     return nil
+}
+
+/// #404 — the full pre-flight derivation for a from-scratch compose call
+/// (`compose_email` / `create_draft` / `update_draft`'s replacement), or `nil`
+/// when the call may proceed. Pure: every input the enumeration depends on is a
+/// parameter, so the draft/send × to/cc/bcc × bare/named matrix is testable
+/// without a live Accessibility grant. `MailController` delegates here.
+///
+/// Reason 6 is SEND-only. On a draft, a display name in ANY of the three lists
+/// is filled through the compose window's AX-addressed field (#277 for `to`,
+/// #404 for `cc` / `bcc`) and is not a refusal reason. On a send it refuses:
+/// a fill that failed would dispatch with missing recipients.
+func composeCallRefusal(
+    format: BodyFormat,
+    accessibilityTrusted: Bool,
+    fromAddress: String?,
+    subject: String,
+    attachments: [String]?,
+    to: [String],
+    cc: [String],
+    bcc: [String],
+    draftMode: Bool
+) -> ComposeRefusal? {
+    let anyDisplayName = anyRecipientHasDisplayName(to)
+        || anyRecipientHasDisplayName(cc)
+        || anyRecipientHasDisplayName(bcc)
+    return composeRefusal(
+        format: format,
+        accessibilityTrusted: accessibilityTrusted,
+        hasCustomSender: (fromAddress?.isEmpty == false),
+        hasSubject: !subject.isEmpty,
+        attachmentsGuiSafe: attachmentPathsGuiSafe(attachments),
+        recipientsAddrSpecOnly: !anyDisplayName,
+        displayNameFillViable: draftMode,
+        // #219 verify R2 (Codex): only a simple addr-spec is safe to drive the
+        // exact From-popup match; an exotic quoted local-part is refused.
+        customSenderIsSimple: fromAddress.map { isSimpleAddrSpec(parseRecipient($0).address) } ?? true
+    )
 }
 
 /// #304 — the pre-flight refusal for `reply_email` / `forward_email`. Only two

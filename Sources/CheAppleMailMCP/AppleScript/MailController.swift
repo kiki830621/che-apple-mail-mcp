@@ -1580,28 +1580,20 @@ actor MailController {
     /// guard identifies our compose window by its title = subject).
     private func composeRefusalForCall(format: BodyFormat, fromAddress: String?, subject: String, attachments: [String]? = nil, recipients: [String] = [], draftMode: Bool = false, cc: [String] = [], bcc: [String] = []) -> ComposeRefusal? {
         if let override = refusalOverride { return override() }
-        return composeRefusal(
+        // #404: the derivation is the pure `composeCallRefusal` so the
+        // draft/send × to/cc/bcc × bare/named matrix is unit-testable. Reason 6
+        // is send-only — on a draft every list is AX-addressed and GUI-filled
+        // (#277 for `to`, #404 for `cc` / `bcc`); the "Cc can be hidden via
+        // Header Fields" objection is answered by locating fields through their
+        // AXIdentifier and revealing Bcc on demand, not by refusing.
+        return composeCallRefusal(
             format: format,
             accessibilityTrusted: AccessibilityStatus.isTrusted,
-            hasCustomSender: (fromAddress?.isEmpty == false),
-            hasSubject: !subject.isEmpty,
-            attachmentsGuiSafe: attachmentPathsGuiSafe(attachments),
-            recipientsAddrSpecOnly: !anyRecipientHasDisplayName(recipients),
-            // #277: GUI clipboard fill is DRAFT-only (a failed fill on a send
-            // would fire with missing recipients) and TO-ONLY — the To field
-            // is always visible + default-focused; Cc/Bcc can be hidden via
-            // Header Fields (#277 verify, Codex: a hidden Cc would silently
-            // drop names), so display-name cc/bcc are refused.
-            displayNameFillViable: draftMode
-                && !anyRecipientHasDisplayName(cc)
-                && !anyRecipientHasDisplayName(bcc),
-            // #219 verify R2 (Codex): only a simple addr-spec is safe to drive
-            // the exact From-popup match; an exotic quoted local-part is
-            // refused. Check the popup address (the value the GUI matches).
-            customSenderIsSimple: fromAddress.map {
-                isSimpleAddrSpec(parseRecipient($0).address)
-            } ?? true
-        )
+            fromAddress: fromAddress,
+            subject: subject,
+            attachments: attachments,
+            to: recipients, cc: cc, bcc: bcc,
+            draftMode: draftMode)
     }
 
     /// #175 — run the wrapper-free mailto compose path. Builds the percent-encoded

@@ -1,6 +1,6 @@
 ## 1. Eligibility：第 6 類 ineligibility 改為 send-only
 
-- [ ] 1.1 `composeRefusal` 的 `displayNameFillViable` 只由 `draftMode` 決定，`composeRefusalForCall` 不再檢查 cc/bcc 顯示名；`ComposeRefusal.displayNameRecipient.message` 改為 send-only 語意並指向 `create_draft`。驗證：`MailtoComposeTests` 新增 refusal 矩陣（draft/send × to/cc/bcc × bare/named，12 格）— draft × named 全部回 nil、send × named 全部回 `.displayNameRecipient`，對應 spec「Ineligible composing calls fail without side effects」與「From-scratch composing tools accept cc and bcc recipients」。
+- [x] 1.1 `composeRefusal` 的 `displayNameFillViable` 只由 `draftMode` 決定，`composeRefusalForCall` 不再檢查 cc/bcc 顯示名；`ComposeRefusal.displayNameRecipient.message` 改為 send-only 語意並指向 `create_draft`。驗證：`MailtoComposeTests` 新增 refusal 矩陣（draft/send × to/cc/bcc × bare/named，12 格）— draft × named 全部回 nil、send × named 全部回 `.displayNameRecipient`，對應 spec「Ineligible composing calls fail without side effects」與「From-scratch composing tools accept cc and bcc recipients」。
 - [ ] 1.2 `composeViaMailto` 對 send 的 defense-in-depth guard 維持覆蓋三個清單；`urlTo` / `urlCc` / `urlBcc` 在該清單含顯示名時整段省略。驗證：`buildMailtoURL` 測試 — `cc` 含顯示名時 URL 無 `cc=`，純位址時有。
 
 ## 2. Fill phase：AX 聚焦取代 Tab 盲跳、貼上而非 set value
