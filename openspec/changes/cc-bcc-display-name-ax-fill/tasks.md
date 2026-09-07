@@ -27,4 +27,5 @@
 ## 6. 全套測試與 live gate
 
 - [x] 6.1 `swift test` 全綠，`NoBodyInjectionGuardTests` 與 `NoContentContainsScanGuardTests` 綠（證明沒有復活舊路徑）。驗證：測試輸出 0 failures，並在 issue #404 貼上 summary 行。
-- [ ] 6.2 Live gate（attended）：對真實帳號 `create_draft` 帶 named Cc + named Bcc（初始 Bcc 隱藏），Mail 草稿顯示人名 token，result 含 `recipients_verified: true` 與 `bcc_field_revealed: true`；再以 `update_draft` 重跑一次；最後刪除測試草稿。驗證：指令與觀測值貼進 #404 closing comment；未跑 → 貼 `blocked-on-setup` 保持 open 並在 description 加 caveat（`.claude/rules/deferred-live-verification.md`）。
+- [x] 6.2 Live gate（attended，2026-09-07 執行）：對真實帳號 `create_draft` 帶 named Cc + named Bcc（初始 Bcc 隱藏），Mail 草稿顯示人名 token，result 含 `recipients_verified: true` 與 `bcc_field_revealed: true`；再以 `update_draft` 重跑一次；最後刪除測試草稿。驗證：指令與觀測值貼進 #404 closing comment；未跑 → 貼 `blocked-on-setup` 保持 open 並在 description 加 caveat（`.claude/rules/deferred-live-verification.md`）。
+  - 執行結果：`create_draft` 半段 **PASS**（release build，真實帳號，named To/Cc/Bcc；`bcc_field_revealed: true`、`recipients_verified: true`；獨立 AppleScript 讀回名稱與位址一致；測試草稿已刪）。`update_draft` 半段 **受 #406 阻塞**——定位步驟的 in-process 草稿掃描逾時 45 秒，v3.0.0 同樣重現，非本 change 回歸；unit 層（`DraftRecipientReceiptTests.testUpdateDraft_namedCc_returnsDeletedOldAndRecipientsVerified`）已綠。依 `deferred-live-verification.md` 走 (b)：#404 貼 `blocked-on-setup`、`update_draft` description 加 caveat。
