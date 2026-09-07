@@ -31,5 +31,5 @@
   - `Sources/CheAppleMailMCP/AppleScript/ComposeScriptBuilder.swift` — fill phase per-field AX 聚焦、Bcc 揭露、AX read-back、cleanup 收 sheet
   - `Sources/CheAppleMailMCP/Server.swift` — `create_draft` / `update_draft` description ×5（含 L364 過期的「keep the legacy path」）
   - `Tests/CheAppleMailMCPTests/` — refusal 矩陣、script builder golden、`NoBodyInjectionGuardTests` 維持綠
-  - `.claude/rules/compose-wrapper-free.md`、`plugin/rules/compose-wrapper-free.md`、`/Users/che/Developer/che-claude-config/rules/common-mail-compose.md`、`CHANGELOG.md`、`README.md`
+  - `.claude/rules/compose-wrapper-free.md`、`plugin/rules/compose-wrapper-free.md`、`~/Developer/che-claude-config/rules/common-mail-compose.md`、`CHANGELOG.md`、`README.md`
 - Issues: #404（主）、#333（併入）；#277 / #304 / #219 / #276 為前置脈絡。
