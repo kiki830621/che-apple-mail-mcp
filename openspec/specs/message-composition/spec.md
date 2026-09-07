@@ -8,178 +8,46 @@ TBD - created by archiving change 'compose-tools-format-parameter'. Update Purpo
 
 ### Requirement: Composing tools accept a format parameter
 
-The system SHALL provide four composing MCP tools — `compose_email`, `create_draft`, `reply_email`, and `forward_email` — each accepting an optional `format` parameter with permitted values `"plain"`, `"markdown"`, and `"html"`. When `format` is omitted or null, the system SHALL treat the request as `format: "plain"` to preserve backwards compatibility.
+The system SHALL provide four composing MCP tools — `compose_email`, `create_draft`, `reply_email`, and `forward_email` — each accepting an optional `format` parameter whose only permitted value is `"plain"`. When `format` is omitted or null, the system SHALL treat the request as `format: "plain"`.
+
+The system SHALL reject `format: "markdown"` and `format: "html"` with an error that names the removal and directs the caller to `"plain"`. Rich-text bodies are not representable on any non-injecting path, and every injecting path has been removed.
 
 #### Scenario: Format parameter omitted defaults to plain
 
 - **WHEN** a caller invokes `compose_email` with body `"Hi\n\n*Regards*"` and no `format` argument
-- **THEN** the system SHALL deliver the email with the literal string `"Hi\n\n*Regards*"` as plain text
-- **AND** the asterisks SHALL NOT be rendered as italic
+- **THEN** the body SHALL be delivered verbatim, with `*Regards*` appearing literally
+
+#### Scenario: Markdown is rejected with a named reason
+
+- **WHEN** a caller invokes any composing tool with `format: "markdown"`
+- **THEN** the tool SHALL fail with an error naming `markdown` as removed and directing the caller to `"plain"`
+- **AND** no draft SHALL be created and no mail SHALL be sent
+
+#### Scenario: HTML is rejected with a named reason
+
+- **WHEN** a caller invokes any composing tool with `format: "html"`
+- **THEN** the tool SHALL fail with an error naming `html` as removed and directing the caller to `"plain"`
+- **AND** no draft SHALL be created and no mail SHALL be sent
 
 #### Scenario: Invalid format value is rejected
 
-- **WHEN** a caller invokes any composing tool with `format: "rtf"` (not a permitted value)
-- **THEN** the system SHALL return an MCP error describing the permitted values `plain`, `markdown`, `html`
-- **AND** the system SHALL NOT create, send, or draft the email
+- **WHEN** a caller invokes any composing tool with `format: "rtf"`
+- **THEN** the tool SHALL fail with a validation error naming the permitted value
 
 ---
 ### Requirement: Plain mode preserves existing behavior
 
-When `format` is `"plain"`, the system SHALL pass the `body` parameter as-is into the AppleScript `content` property of the outgoing message. HTML tags in the body SHALL appear literally in the delivered email; no HTML rendering SHALL occur.
+When `format` is `"plain"`, the system SHALL deliver the `body` parameter verbatim: HTML tags SHALL appear literally in the delivered email and no HTML rendering SHALL occur. The body SHALL reach the message through Mail's own editor — the `mailto:` hand-off or the native reply/forward verb plus paste — and SHALL NOT be assigned through the AppleScript `content` property, which is what produces the `<blockquote type="cite">` wrapper.
 
-#### Scenario: Plain mode preserves literal HTML tags
+#### Scenario: Plain body is delivered literally
 
 - **WHEN** a caller invokes `compose_email` with `body: "<b>bold</b>"` and `format: "plain"`
-- **THEN** the recipient SHALL see the literal characters `<b>bold</b>` in the email body
-- **AND** the text SHALL NOT be rendered as bold
+- **THEN** the delivered email SHALL show the characters `<b>bold</b>` literally
 
----
-### Requirement: Markdown mode renders via AttributedString
+#### Scenario: Plain body is not assigned via AppleScript content
 
-When `format` is `"markdown"`, the system SHALL parse `body` using Swift's `AttributedString(markdown:)` initializer and convert the resulting attributed string to HTML, then assign the HTML to the AppleScript `html content` property of the outgoing message. The system SHALL support at minimum the following markdown constructs: bold (`**text**`), italic (`*text*` or `_text_`), inline code (`` `text` ``), links (`[text](url)`), and unordered lists. Constructs outside this subset (e.g., tables, footnotes) SHALL be delegated to `AttributedString(markdown:)` best-effort rendering and SHALL NOT cause the tool to fail.
-
-#### Scenario: Markdown bold and italic render correctly
-
-- **WHEN** a caller invokes `compose_email` with `body: "**bold** and *italic*"` and `format: "markdown"`
-- **THEN** the recipient SHALL see the word "bold" rendered with bold typography
-- **AND** the word "italic" SHALL be rendered with italic typography
-- **AND** the asterisks SHALL NOT appear in the delivered email
-
-#### Scenario: Markdown link is clickable
-
-- **WHEN** a caller invokes `compose_email` with `body: "See [example](https://example.com)"` and `format: "markdown"`
-- **THEN** the delivered email SHALL contain a clickable hyperlink with visible text "example" and URL `https://example.com`
-
----
-### Requirement: Markdown mode honors opt-in URL scheme allowlist via `sanitize_links`
-
-When `format` is `"markdown"`, the system SHALL accept an optional boolean parameter `sanitize_links` on each of the four composing tools (`compose_email`, `create_draft`, `reply_email`, `forward_email`). When `sanitize_links` is omitted or `false`, the system SHALL render markdown links exactly as `AttributedString(markdown:)` produces them — preserving every URL scheme. When `sanitize_links` is `true`, the system SHALL filter parsed link URLs against a closed allowlist of `{http, https, mailto, tel}` (compared case-insensitively against the URL's scheme component); any link whose scheme falls outside this set SHALL be rendered as plain text — the link's anchor text SHALL be preserved, but the surrounding `<a>` element SHALL be omitted from the emitted HTML. The `sanitize_links` parameter SHALL be a no-op when `format` is `"plain"` (no link parsing occurs) or `"html"` (caller-trusted raw HTML, per the existing "HTML mode writes body to AppleScript html content" requirement). The `sanitize_links` parameter SHALL NOT appear in the `required` array of any tool schema and SHALL default to `false` for backwards compatibility.
-
-#### Scenario: Default-off preserves javascript: URL passthrough
-
-- **WHEN** a caller invokes `compose_email` with `body: "[click](javascript:alert('xss'))"` and `format: "markdown"`, omitting `sanitize_links`
-- **THEN** the rendered HTML SHALL contain `href="javascript:alert('xss')"` wrapped in an `<a>` element
-- **AND** the anchor text SHALL be `click`
-- **AND** the system SHALL NOT alter the URL or drop the anchor
-
-#### Scenario: sanitize_links=true drops anchor on javascript: URL
-
-- **WHEN** a caller invokes `compose_email` with `body: "[click](javascript:alert('xss'))"`, `format: "markdown"`, and `sanitize_links: true`
-- **THEN** the rendered HTML SHALL NOT contain `href="javascript:`
-- **AND** the rendered HTML SHALL NOT contain an `<a>` element wrapping the text `click`
-- **AND** the literal text `click` SHALL be preserved in the rendered output
-
-##### Example: bypass classes blocked under sanitize_links=true
-
-| Input link in body                          | Expected emitted href                              | Notes                            |
-| ------------------------------------------- | -------------------------------------------------- | -------------------------------- |
-| `[x](javascript:alert(1))`                  | (no `<a>` element; literal `x` preserved)          | direct javascript:               |
-| `[x](JaVaScRiPt:alert(1))`                  | (no `<a>` element; literal `x` preserved)          | case-mix, lowercased compare     |
-| `[x](data:text/html,<script>alert(1)</script>)` | (no `<a>` element; literal `x` preserved)      | data: not in allowlist           |
-| `[x](file:///etc/passwd)`                   | (no `<a>` element; literal `x` preserved)          | file: not in allowlist           |
-| `[x](vbscript:msgbox(1))`                   | (no `<a>` element; literal `x` preserved)          | vbscript: not in allowlist       |
-
-#### Scenario: sanitize_links=true preserves http, https, mailto, tel allowlist
-
-- **WHEN** a caller invokes `compose_email` with `format: "markdown"` and `sanitize_links: true`, supplying a body with links across the allowlisted schemes
-- **THEN** every allowlisted link SHALL render as a clickable `<a href="...">` element with the original URL preserved verbatim
-- **AND** the anchor text SHALL match the markdown link's display text
-
-##### Example: allowlist preservation
-
-| Input link in body              | Expected behavior                                                           |
-| ------------------------------- | --------------------------------------------------------------------------- |
-| `[site](https://example.com/x)` | `<a href="https://example.com/x">site</a>` emitted                          |
-| `[mail](mailto:foo@example.com)`| `<a href="mailto:foo@example.com">mail</a>` emitted                         |
-| `[call](tel:+15551234)`         | `<a href="tel:+15551234">call</a>` emitted                                  |
-| `[home](http://example.com/)`   | `<a href="http://example.com/">home</a>` emitted                            |
-
-#### Scenario: sanitize_links is no-op in plain and html modes
-
-- **WHEN** a caller invokes any composing tool with `format: "plain"` and `sanitize_links: true`
-- **THEN** the system SHALL pass the body verbatim into the AppleScript `content` property
-- **AND** the system SHALL NOT parse, transform, or filter URLs
-- **WHEN** a caller invokes any composing tool with `format: "html"` and `sanitize_links: true`
-- **THEN** the system SHALL assign the body verbatim to the AppleScript `html content` property
-- **AND** the system SHALL NOT parse, transform, or filter URLs in the supplied HTML
-
-#### Scenario: sanitize_links wiring contract holds at the script-builder seam
-
-- **WHEN** any of the four script-builder functions (`buildComposeEmailScript`, `buildCreateDraftScript`, `buildReplyEmailScript`, `buildForwardEmailScript`) is invoked with `format: "markdown"`, `sanitizeLinks: true`, and a body containing `[click](javascript:alert(1))`
-- **THEN** the produced AppleScript text SHALL NOT contain the substring `href="javascript:`
-- **AND** when the same builder is invoked with `sanitizeLinks: false` (or omitted), the produced AppleScript text SHALL contain `href="javascript:`
-- **AND** the produced AppleScript text in both arms SHALL contain the anchor text `click` (either as plain text when scheme is dropped, or wrapped in `<a href="javascript:...">` when not)
-- **AND** this builder→renderer seam pins the most security-relevant forwarding link in the chain; the controller→builder one-line forwarding inside `MailController.{composeEmail, createDraft, replyEmail, forwardEmail}` and the MCP-schema→handler `requireBool` parsing are explicitly NOT covered by this scenario and require separate test surfaces
-
----
-### Requirement: HTML mode writes body to AppleScript html content
-
-When `format` is `"html"`, the system SHALL assign the `body` string directly to the AppleScript `html content` property of the outgoing message without parsing or transformation. The system SHALL NOT attempt to validate or sanitize the HTML.
-
-#### Scenario: HTML body renders as rich text
-
-- **WHEN** a caller invokes `compose_email` with `body: "<b>bold</b> <a href=\"https://example.com\">link</a>"` and `format: "html"`
-- **THEN** the word "bold" SHALL be rendered with bold typography in the delivered email
-- **AND** the text "link" SHALL be rendered as a clickable hyperlink to `https://example.com`
-
----
-### Requirement: Markdown rendering has documented Foundation parser limitations
-
-When `format` is `"markdown"`, the system relies on Swift Foundation's `AttributedString(markdown:)` initializer for parsing. This initializer has known limitations that the system SHALL NOT attempt to work around — instead it documents them so callers know what to expect.
-
-#### Scenario: Inline emphasis inside a markdown link is collapsed
-
-- **WHEN** a caller invokes `compose_email` with `body: "[**bold** text](https://example.com)"` and `format: "markdown"`
-- **THEN** Foundation's `AttributedString(markdown:)` MAY collapse the nested emphasis and emit a single anchor with plain text (e.g. `<a href="https://example.com">bold text</a>` instead of `<a href="https://example.com"><strong>bold</strong> text</a>`)
-- **AND** the system SHALL NOT pre-process the markdown body to preserve nested emphasis inside links — callers wanting bolded link text SHALL use `format: "html"` and supply the desired markup directly, or restructure the markdown to put the emphasis outside the link (e.g. `**[bold text](https://example.com)**`)
-
-#### Scenario: Code block language hint propagates to HTML class attribute
-
-- **WHEN** a caller invokes `compose_email` with a markdown body containing a fenced code block with a language tag (e.g. ` ```swift\nlet x = 1\n``` `) and `format: "markdown"`
-- **THEN** the rendered HTML SHALL emit `<pre><code class="language-swift">let x = 1\n</code></pre>` with the language hint as a `language-<hint>` class on the inner `<code>` element (CommonMark recommended pattern; honored by Prism / Pygments / highlight.js / mail clients with syntax-highlight plugins)
-- **AND** when the fence has no language tag (e.g. ` ```\nplain\n``` `), the rendered HTML SHALL emit `<pre><code>plain\n</code></pre>` without any `class` attribute (backwards compatible)
-
-##### Example: code fence rendering
-
-| Markdown input | Expected HTML output |
-| -------------- | -------------------- |
-| `` ```swift\nlet x = 1\n``` `` | `<pre><code class="language-swift">let x = 1\n</code></pre>` |
-| `` ```python\nprint(x)\n``` `` | `<pre><code class="language-python">print(x)\n</code></pre>` |
-| `` ```\nplain code\n``` `` (no tag) | `<pre><code>plain code\n</code></pre>` |
-
-#### Scenario: Control characters in body are not round-trip safe
-
-- **WHEN** a caller invokes any composing tool with `format: "markdown"` and a body containing C0 control characters (U+0000 through U+001F, e.g. U+001E RECORD SEPARATOR or U+0008 BACKSPACE)
-- **THEN** Foundation's `AttributedString(markdown:)` MAY strip or replace these characters during parsing
-- **AND** the system SHALL NOT escape control characters before parsing; callers needing exact byte-for-byte preservation SHALL use `format: "html"` with HTML entity references (e.g. `&#x1E;` for U+001E) or `format: "plain"` to bypass markdown parsing entirely
-
----
-### Requirement: Reply and forward wrap original content in HTML blockquote
-
-When `reply_email` or `forward_email` is invoked with `format` set to `"markdown"` or `"html"`, the system SHALL construct the outgoing message body such that the user-supplied body appears first (rendered per the format rules above), followed by an `<hr>` separator, followed by the original message content wrapped inside an HTML `<blockquote>` element. The system SHALL attempt to read `html content of originalMsg` via AppleScript first; when that read succeeds and returns non-empty content, the system SHALL place that HTML directly inside the blockquote. When the read is denied by the AppleScript runtime (a known macOS limitation — see Requirement: AppleScript html content read is denied on messages) or returns empty, the system SHALL HTML-escape the plain-text content of the original message, convert newlines to `<br>`, and place the result inside the blockquote.
-
-#### Scenario: Reply composition uses original HTML when available
-
-- **WHEN** `composeReplyHTML` is invoked with `userBody: "Thanks, noted."`, `userFormat: markdown`, `originalHTML: "<p>Can you review?</p>"`, and a non-empty `originalPlain`
-- **THEN** the returned HTML SHALL contain `Thanks, noted.` rendered as a paragraph
-- **AND** the HTML SHALL contain `<blockquote>` wrapping the content `<p>Can you review?</p>`
-
-#### Scenario: Reply composition escapes plain text when original HTML unavailable
-
-- **WHEN** `composeReplyHTML` is invoked with `userBody: "Thanks."`, `userFormat: markdown`, `originalHTML: nil`, and `originalPlain: "Can you <review>?"`
-- **THEN** the returned HTML SHALL contain `<blockquote>`
-- **AND** the blockquote content SHALL contain `Can you &lt;review&gt;?` (HTML-escaped)
-
-#### Scenario: Reply in plain mode embeds RFC 3676 quoted original
-
-- **WHEN** a caller invokes `reply_email` with `body: "Thanks"` and `format: "plain"` (or omits format)
-- **THEN** the reply SHALL use the AppleScript `content` property
-- **AND** the value SHALL be `"Thanks\n\n> <line 1 of original plain content>\n> <line 2>\n..."` — the user body, a blank line, then the original plain message with each line prefixed by `"> "` (greater-than + space) per RFC 3676 §4.5
-- **AND** empty lines in the original SHALL be quoted as `">"` (no trailing space) per RFC 3676 §4.5 stuffing rule
-- **AND** the reply SHALL NOT use the AppleScript `html content` property
-- **AND** if the pre-fetch of original content fails (e.g. message deleted, sandbox denial), the reply SHALL gracefully degrade to the user body alone (no quoted block) rather than aborting the entire reply
-
-> **Note (#43)**: Pre-v2.5.0 the plain branch used `set content to "<body>" & return & return & content`, which silently produced bare-body replies because Mail.app's outgoing-message `content` property is empty until the GUI compose pipeline materializes the quoted body. Replaced with Swift-side composition (`composeReplyPlainText`) that pre-fetches and quotes deterministically.
+- **WHEN** the AppleScript emitted for a plain compose is inspected
+- **THEN** it SHALL NOT assign the body through `content` or `html content`
 
 ---
 ### Requirement: Signature preservation is out of scope
@@ -208,52 +76,100 @@ On macOS 13+ (including macOS 26), Mail.app's AppleScript scripting interface de
 ---
 ### Requirement: Composing tools input schema exposes format parameter
 
-The MCP tool input schema for each of `compose_email`, `create_draft`, `reply_email`, and `forward_email` SHALL declare `format` as an optional string property with an enum constraint of `["plain", "markdown", "html"]` and a description stating the default is `"plain"`. The `format` property SHALL NOT appear in the `required` array of any tool schema.
+Each composing tool's input schema SHALL expose `format` as an optional string with an enum of exactly `["plain"]`, and SHALL describe it as the only supported body format. The schema SHALL NOT expose `require_wrapper_free`.
 
-#### Scenario: Tool schema advertises format enum
+#### Scenario: Schema advertises the single permitted format
 
-- **WHEN** an MCP client calls `tools/list`
-- **THEN** the returned schema for each of the four composing tools SHALL include a `format` property
-- **AND** the `format` property SHALL declare enum values exactly `["plain", "markdown", "html"]`
-- **AND** the `format` property SHALL NOT be listed as required
+- **WHEN** any composing tool's schema is inspected
+- **THEN** `format` SHALL be present with enum `["plain"]`
+- **AND** `require_wrapper_free` SHALL be absent
 
 ---
 ### Requirement: From-scratch composing tools accept cc and bcc recipients
 
 The `compose_email` and `create_draft` MCP tools SHALL each accept optional `cc` and `bcc` parameters, each an array of recipient email-address strings. When provided, the system SHALL set the corresponding Apple Mail `cc recipients` / `bcc recipients` of the outgoing message. The `cc` and `bcc` properties SHALL NOT appear in the `required` array of either tool schema, and omitting them SHALL produce behavior identical to the pre-existing single-recipient (`to`-only) path. Recipient addresses supplied via `cc` / `bcc` SHALL be validated at the boundary identically to `to` recipients.
 
+`cc` and `bcc` addresses SHALL be bare addr-specs. A display-name form (`Name <addr>`) SHALL cause the call to fail per the ineligibility contract, because a `mailto:` URL carries only addr-spec per RFC 6068. `to` recipients SHALL continue to accept display names, which the clean path fills through the GUI.
+
 > `reply_email` instead exposes `cc_additional` (recipients added on top of those derived from `reply_all`) — a reply-context parameter with distinct semantics — and is not covered by this requirement. `forward_email` does not currently accept `cc` / `bcc`.
 
 #### Scenario: create_draft schema advertises cc and bcc
 
-- **WHEN** an MCP client calls `tools/list`
-- **THEN** the returned schema for `create_draft` SHALL include `cc` and `bcc` array-of-string properties
-- **AND** neither `cc` nor `bcc` SHALL be listed as required
+- **WHEN** the `create_draft` tool schema is inspected
+- **THEN** it SHALL expose optional `cc` and `bcc` array parameters
 
-#### Scenario: Draft is created with cc and bcc recipients
+#### Scenario: Display-name cc is refused
 
-- **WHEN** `create_draft` is called with `cc` and/or `bcc` arrays
-- **THEN** the generated AppleScript SHALL emit `make new cc recipient` / `make new bcc recipient` fragments inside the `tell newMessage` block
-- **AND** omitting both SHALL yield AppleScript byte-identical to the pre-`cc`/`bcc` builder
+- **WHEN** `create_draft` is invoked with `cc: ["Name <a@b.co>"]`
+- **THEN** the tool SHALL fail per the ineligibility contract and create no draft
 
 ---
-### Requirement: Wrapper-free strictness parameter
+### Requirement: Composing tools never inject a body via AppleScript
 
-`compose_email` and `create_draft` SHALL accept an optional boolean `require_wrapper_free` (default false). When true and the wrapper-free mailto path is ineligible (non-plain format, empty subject, Accessibility not granted, a non-simple custom sender such as a quoted local-part, or the env hatch set — note that since #219 a *simple* custom `from_address` rides the clean path via the verified From popup and is NOT an ineligibility reason on its own), the tool SHALL fail with an error naming the ineligibility reason and actionable alternatives, and SHALL NOT create any draft or send any mail via the legacy injection path. When true and the wrapper-free path is attempted but fails, the error SHALL propagate without a legacy fallback (the #242 post-dispatch semantics are unchanged). When false or omitted, behavior SHALL be identical to the pre-existing graceful-fallback contract, including its disclosure suffix.
+The system SHALL NOT assign an outgoing message's body through the AppleScript `content` property, the `html content` property, or a `content:` entry in `make new outgoing message with properties`. Apple Mail wraps any AppleScript-assigned body in `<blockquote type="cite">` at MIME serialization, which several mail clients render as a quotation of the sender's own text and which the sender cannot observe locally.
 
-#### Scenario: Strict compose refuses an ineligible call without side effects
+Every composing tool SHALL obtain its body exclusively from Mail's own editor — via the `mailto:` hand-off for `compose_email` / `create_draft`, and via the native reply/forward verb plus paste for `reply_email` / `forward_email`.
 
-- **WHEN** `compose_email` is called with `require_wrapper_free: true` and a custom `from_address` while Accessibility is not granted (so the verified From popup, #219, cannot run)
-- **THEN** the tool SHALL return an error naming the reason (the verified sender popup needs Accessibility) and the actionable alternatives (grant Accessibility for a clean body, or accept the legacy path whose native `set sender` uses the correct account)
-- **AND** no draft SHALL be created and no mail SHALL be sent
+#### Scenario: No composing path assigns content via AppleScript
 
-#### Scenario: Strict compose propagates a clean-path failure without fallback
+- **WHEN** the AppleScript emitted by any composing tool is inspected
+- **THEN** it SHALL contain no `set content`, no `set html content`, and no `content:` property in an outgoing-message construction
 
-- **WHEN** `compose_email` is called with `require_wrapper_free: true`, the call is eligible, and the mailto GUI path throws
-- **THEN** the error SHALL propagate to the caller
-- **AND** the legacy injection path SHALL NOT run
+#### Scenario: A successful compose produces an unwrapped body
 
-#### Scenario: Default remains graceful fallback
+- **WHEN** `create_draft` succeeds with `format: "plain"`
+- **THEN** the saved draft's source SHALL NOT contain `<blockquote type="cite">` wrapping the supplied body
 
-- **WHEN** `compose_email` is called without `require_wrapper_free` (or with false) and the call is ineligible
-- **THEN** the legacy path SHALL run and the result SHALL carry the `[legacy path — …]` disclosure suffix, exactly as before
+---
+### Requirement: Ineligible composing calls fail without side effects
+
+When a composing tool cannot use its non-injecting path, it SHALL fail with an error that names the reason and states an actionable alternative, and SHALL NOT create a draft, send mail, or delete an existing draft.
+
+The set of ineligibility reasons SHALL be exactly the following six, and SHALL NOT be extended by analogy:
+
+1. `format` is `markdown` or `html`
+2. the subject is empty (the clean path identifies its compose window by title)
+3. Accessibility is not granted (GUI keystrokes are unavailable)
+4. a supplied `from_address` is not a simple addr-spec
+5. an attachment path contains non-ASCII characters
+6. a `cc` or `bcc` recipient carries a display name
+
+#### Scenario: Missing Accessibility fails and names the zero-TCC alternative
+
+- **WHEN** `create_draft` is invoked while Accessibility is not granted
+- **THEN** the tool SHALL fail naming Accessibility as the reason
+- **AND** the error SHALL name `open_mailto` as an alternative that requires no TCC grant, noting that it cannot carry attachments
+- **AND** no draft SHALL be created
+
+#### Scenario: Non-ASCII attachment path fails with the manual recipe
+
+- **WHEN** `create_draft` is invoked with an attachment path containing non-ASCII characters
+- **THEN** the tool SHALL fail naming the path as the reason
+- **AND** the error SHALL direct the caller to create the draft without `attachments` and attach the file manually
+- **AND** no draft SHALL be created
+
+#### Scenario: Display-name cc fails rather than degrading silently
+
+- **WHEN** `compose_email` is invoked with `cc: ["王小明 <ming@example.com>"]`
+- **THEN** the tool SHALL fail naming display-name cc/bcc as the reason
+- **AND** the error SHALL direct the caller to supply a bare address
+- **AND** no mail SHALL be sent
+
+---
+### Requirement: Runtime composing failures propagate without falling back
+
+When a composing tool's non-injecting path fails **after** it has begun operating — a GUI keystroke that does not land, a paste that does not take, a send stage that errors — the system SHALL propagate the error to the caller and SHALL NOT retry the operation through any body-assigning path.
+
+Such a failure is distinct from the pre-flight ineligibility contract: it occurs after side effects are possible, so the error message SHALL describe how far the operation progressed and SHALL NOT claim that nothing happened. The existing post-dispatch classification (which distinguishes a failure before dispatch from one after it, so a caller can tell whether retrying risks a duplicate) SHALL continue to govern retry safety.
+
+#### Scenario: A mid-operation GUI failure surfaces rather than falling back
+
+- **WHEN** a composing tool's clean path opens its window and a subsequent GUI step fails
+- **THEN** the tool SHALL return an error describing the failure
+- **AND** the tool SHALL NOT assign the body through AppleScript as a fallback
+
+#### Scenario: A post-dispatch failure is not presented as a no-op
+
+- **WHEN** a send-stage failure occurs after the message has been dispatched
+- **THEN** the error SHALL retain its post-dispatch classification so the caller can tell that retrying risks sending twice
+- **AND** the error SHALL NOT state that no mail was sent
