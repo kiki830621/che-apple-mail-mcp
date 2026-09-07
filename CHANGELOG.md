@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Drafts accept display-name Cc/Bcc recipients (`Name <addr>`), filled through
+  AX-addressed compose-window fields**
+  ([#404](https://github.com/PsychQuant/che-apple-mail-mcp/issues/404)).
+  `to` has taken display names on the clean path since #277; `cc` / `bcc` were
+  refused because a Tab-to-Cc paste could land in the wrong field when Mail hides
+  Cc (#277 verify). A live Accessibility probe on 2026-09-07 showed Mail gives every
+  address field a stable AXIdentifier (`Mail.toField` / `Mail.ccField` /
+  `Mail.bccField`), so the fill phase now locates each field by identifier,
+  focuses it, pastes the whole list, commits with Tab, and reads the tokens back
+  (count + display names) before ⌘S — a missing field or a mismatch aborts with a
+  named `FILLFIELD` / `FILLREADBACK` reason, nothing saved, our window closed. AX
+  `set value` is deliberately not used: the same probe showed it collapses a comma
+  list of *named* recipients into one token (silent recipient loss). New pure
+  helpers `composeCallRefusal`, `partitionRecipientsForMailto`, `AddressField`,
+  `RecipientFill`; new tests `ComposeEligibilityMatrixTests`,
+  `MailtoRecipientPartitionTests`, `ComposeFillPhaseTests`; generated AppleScript
+  syntax-checked with `osacompile`.
+- **Hidden Bcc field is revealed on demand and disclosed** (#404). When
+  `Mail.bccField` is absent, the View menu item matching `密件副本` / `Bcc` is
+  clicked and the field polled until present; the menu state is *not* restored
+  (restoring before the save is unverified for recipient loss, after the save
+  there is no window to act on), so the result says `bcc_field_revealed: true`.
+- **Post-save recipient receipt** (#404). A token exposes no address over AX, so
+  when cc/bcc were GUI-filled the newest draft with the exact subject is re-read
+  (`considering case`) and its cc/bcc addresses compared with the request. The
+  result carries `recipients_verified: true`, or `recipients_verified: false`
+  plus `recipients_diff` — never a failure, the draft is always kept (#276
+  direction). `update_draft` inherits it through `createDraft` with no extra
+  settle. `DraftRecipientReceipt.swift`; `DraftRecipientReceiptTests`.
+
+### Changed
+
+- **Ineligibility reason 6 is send-only** (#404, spec `message-composition`).
+  It read "a `cc` or `bcc` recipient carries a display name"; it now reads "a
+  `to` / `cc` / `bcc` recipient carries a display name on a *send*
+  (`compose_email`)". `compose_email` behaves exactly as before (still refuses —
+  a fill that failed on a send would dispatch with missing recipients);
+  `create_draft` / `update_draft` no longer refuse for reason 6. The refusal
+  message, the five `create_draft` / `update_draft` recipient descriptions, and
+  the three compose rules (`.claude/rules`, `plugin/rules`,
+  `che-claude-config`) say so. The draft result string gains the
+  `[display-name … GUI-filled]`, `[bcc_field_revealed …]` and
+  `[recipients_verified …]` disclosures.
+
+### Fixed
+
+- **Pre-dispatch failures no longer leave an orphan compose window**
+  ([#333](https://github.com/PsychQuant/che-apple-mail-mcp/issues/333)). The
+  on-error cleanup closed our window with `close … saving no`, but a mailto
+  compose window answers that with the "save this message as a draft?" sheet
+  (AXIdentifier `Mail.sendMessageAlert`) and stays open behind it — so the next
+  attempt found a same-title window and failed too, the chain #333 describes
+  (live-observed 2026-09-07 during the #404 probe). Cleanup now clicks the
+  sheet's *discard* button (`不儲存` / `Don't Save` — never save or cancel),
+  re-checks the window, and appends a `WINDOWLEFTOPEN` note naming the title if
+  it survives. The post-dispatch branch (#242) is untouched.
+  `ComposeCleanupSheetTests`.
+
 ## [3.0.0] - 2026-08-31
 
 ### Added

@@ -20,11 +20,11 @@
 
 ## 5. Description、rules、CHANGELOG
 
-- [ ] 5.1 [P] `Server.swift` 中 `create_draft` / `update_draft` 的 `to` / `cc` / `bcc` description 改寫：draft 接受顯示名（AX 聚焦貼上、Bcc 自動揭露不還原、`recipients_verified` 語意）、send 拒絕；移除「keep the legacy path」字樣與 `ComposeScriptBuilder.swift` 內「keeps the LEGACY path」註解。驗證：`grep -rn "legacy path" Sources/` 只剩歷史說明性註解（無行為描述）；doc-count guard 測試（#248）綠。
-- [ ] 5.2 [P] 三份 rules 第 6 類同步：`.claude/rules/compose-wrapper-free.md`、`plugin/rules/compose-wrapper-free.md`、`/Users/che/Developer/che-claude-config/rules/common-mail-compose.md` — 第 6 類改為「send 帶顯示名收件人」，並註明 draft 的 Bcc 會被切出且不還原。驗證：三份檔案的第 6 類列文字 diff 一致（逐字相同段落）。
-- [ ] 5.3 [P] `CHANGELOG.md` `[Unreleased]` 新增 Changed 條目（#404 / #333）：draft 顯示名 cc/bcc、result 新欄位、第 6 類語意改寫、cleanup sheet；`README.md` 能力矩陣更新 cc/bcc 顯示名一列。驗證：`ManifestVersionTests` 與 README/manifest 計數 guard 綠。
+- [x] 5.1 [P] `Server.swift` 中 `create_draft` / `update_draft` 的 `to` / `cc` / `bcc` description 改寫：draft 接受顯示名（AX 聚焦貼上、Bcc 自動揭露不還原、`recipients_verified` 語意）、send 拒絕；移除「keep the legacy path」字樣與 `ComposeScriptBuilder.swift` 內「keeps the LEGACY path」註解。驗證：`grep -rn "legacy path" Sources/` 只剩歷史說明性註解（無行為描述）；doc-count guard 測試（#248）綠。
+- [x] 5.2 [P] 三份 rules 第 6 類同步：`.claude/rules/compose-wrapper-free.md`、`plugin/rules/compose-wrapper-free.md`、`/Users/che/Developer/che-claude-config/rules/common-mail-compose.md` — 第 6 類改為「send 帶顯示名收件人」，並註明 draft 的 Bcc 會被切出且不還原。驗證：三份檔案的第 6 類列文字 diff 一致（逐字相同段落）。
+- [x] 5.3 [P] `CHANGELOG.md` `[Unreleased]` 新增 Changed 條目（#404 / #333）：draft 顯示名 cc/bcc、result 新欄位、第 6 類語意改寫、cleanup sheet；`README.md` 能力矩陣更新 cc/bcc 顯示名一列。驗證：`ManifestVersionTests` 與 README/manifest 計數 guard 綠。
 
 ## 6. 全套測試與 live gate
 
-- [ ] 6.1 `swift test` 全綠，`NoBodyInjectionGuardTests` 與 `NoContentContainsScanGuardTests` 綠（證明沒有復活舊路徑）。驗證：測試輸出 0 failures，並在 issue #404 貼上 summary 行。
+- [x] 6.1 `swift test` 全綠，`NoBodyInjectionGuardTests` 與 `NoContentContainsScanGuardTests` 綠（證明沒有復活舊路徑）。驗證：測試輸出 0 failures，並在 issue #404 貼上 summary 行。
 - [ ] 6.2 Live gate（attended）：對真實帳號 `create_draft` 帶 named Cc + named Bcc（初始 Bcc 隱藏），Mail 草稿顯示人名 token，result 含 `recipients_verified: true` 與 `bcc_field_revealed: true`；再以 `update_draft` 重跑一次；最後刪除測試草稿。驗證：指令與觀測值貼進 #404 closing comment；未跑 → 貼 `blocked-on-setup` 保持 open 並在 description 加 caveat（`.claude/rules/deferred-live-verification.md`）。
