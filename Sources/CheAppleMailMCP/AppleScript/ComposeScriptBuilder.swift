@@ -222,6 +222,16 @@ func buildMailtoComposeScript(
         tell application "System Events"
             tell process "Mail"
                 repeat with _mbi in menu bar items of menu bar 1
+                    -- PR #407 R1 #10: only the View menu (顯示方式 / View). The
+                    -- Window menu lists window TITLES — our own subject — so a
+                    -- bar-wide fragment scan could click a window entry instead.
+                    set _mbName to ""
+                    try
+                        set _mbName to (name of _mbi as text)
+                    end try
+                    if _mbName is not "顯示方式" and _mbName is not "View" then
+                        -- skip
+                    else
                     try
                         repeat with _mi in menu items of menu 1 of _mbi
                             set _nm to ""
@@ -233,6 +243,7 @@ func buildMailtoComposeScript(
                             end repeat
                         end repeat
                     end try
+                    end if
                 end repeat
             end tell
         end tell
@@ -352,9 +363,14 @@ func buildMailtoComposeScript(
     for entry in fill {
         let idf = entry.field.axIdentifier
         let line = entry.recipients.joined(separator: ", ")
+        // PR #407 R1 #6: a bare address's token is NOT an invariant — Mail
+        // renders an address that has a Contacts card as the card's NAME. So a
+        // bare recipient contributes an empty expectation (= any token text);
+        // only a recipient that carries a display name expects that name. The
+        // COUNT stays strict — that is what catches `set value`-style merging.
         let expectedNames = entry.recipients.map { r -> String in
             let parsed = parseRecipient(r)
-            return "\"" + appleScriptEscape(parsed.name ?? parsed.address) + "\""
+            return "\"" + appleScriptEscape(parsed.name ?? "") + "\""
         }.joined(separator: ", ")
         let expectedCount = entry.recipients.count
         let reveal: String
@@ -390,7 +406,14 @@ func buildMailtoComposeScript(
             tell process "Mail"
                 set frontmost to true
                 \(raiseOnly)
-                set _fld to my findAddressField(_w, "\(idf)")\(reveal)
+                -- PR #407 R1 #13: the AX tree settles for a beat after the
+                -- window opens (#295/#296) — poll the field, never judge one probe.
+                set _fld to missing value
+                repeat 12 times
+                    set _fld to my findAddressField(_w, "\(idf)")
+                    if _fld is not missing value then exit repeat
+                    delay 0.3
+                end repeat\(reveal)
                 if _fld is missing value then error "FILLFIELD: address field \(idf) not found on the compose window — cannot fill \(entry.field.rawValue) display-name recipients"
                 set focused of _fld to true
                 delay 0.25
@@ -409,7 +432,7 @@ func buildMailtoComposeScript(
                     try
                         set _tokVal to (value of UI element _ti of _fld as text)
                     end try
-                    if _tokVal is not (item _ti of _expected) then error "FILLREADBACK: \(idf) token " & _ti & " reads \\"" & _tokVal & "\\", expected \\"" & (item _ti of _expected) & "\\""
+                    if (item _ti of _expected) is not "" and _tokVal is not (item _ti of _expected) then error "FILLREADBACK: \(idf) token " & _ti & " reads \\"" & _tokVal & "\\", expected \\"" & (item _ti of _expected) & "\\""
                 end repeat
             end tell
         end tell
@@ -645,6 +668,18 @@ func buildMailtoComposeScript(
             delay 0.4
             tell application "System Events"
                 tell process "Mail"
+                    -- PR #407 R1 #11: System Events cannot see Mail's window
+                    -- ids, so the sheet is found through the window TITLE. If
+                    -- more than one window carries our subject the click could
+                    -- discard someone else's unsaved message — refuse, and let
+                    -- the WINDOWLEFTOPEN note below report it.
+                    set _titleMatches to 0
+                    repeat with _cw2 in windows
+                        try
+                            if (title of _cw2) is "\(subjEsc)" then set _titleMatches to _titleMatches + 1
+                        end try
+                    end repeat
+                    if _titleMatches is 1 then
                     repeat with _cw2 in windows
                         try
                             if (title of _cw2) is "\(subjEsc)" and (count of sheets of _cw2) > 0 then
@@ -655,7 +690,7 @@ func buildMailtoComposeScript(
                                         try
                                             set _bt to (title of _b as text)
                                         end try
-                                        if _bt is "不儲存" or _bt starts with "Don" then
+                                        if _bt is "不儲存" or _bt is "Don't Save" or _bt is "Don’t Save" then
                                             click _b
                                             exit repeat
                                         end if
@@ -664,6 +699,7 @@ func buildMailtoComposeScript(
                             end if
                         end try
                     end repeat
+                    end if
                 end tell
             end tell
             delay 0.4

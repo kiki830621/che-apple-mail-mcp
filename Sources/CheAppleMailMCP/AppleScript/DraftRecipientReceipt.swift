@@ -81,36 +81,101 @@ func parseRecipientReceipt(_ raw: String) -> RecipientReceipt? {
         bccFound: addresses(halves.count > 1 ? halves[1] : nil))
 }
 
-/// The disclosure appended to a draft result. Compares the caller's intended
-/// addresses (display names stripped via `parseRecipient`) with what the draft
-/// holds, case-insensitively and order-insensitively. Never a failure: a
-/// mismatch or a missing draft is reported with `recipients_verified: false`
-/// and the draft is KEPT — the failure direction is always toward keeping
-/// drafts (#276).
-func recipientReceiptDisclosure(
-    expectedCc: [String], expectedBcc: [String], receipt: RecipientReceipt?
-) -> String {
-    let wantCc = expectedCc.map { parseRecipient($0).address.lowercased() }
-    let wantBcc = expectedBcc.map { parseRecipient($0).address.lowercased() }
-    guard let receipt else {
-        return " [recipients_verified: false — a draft with this subject was not found in the drafts "
-            + "mailbox after saving; any draft that did land is KEPT; recipients_diff: "
-            + diffLine("cc", wantCc, []) + "; " + diffLine("bcc", wantBcc, []) + "]"
-    }
-    let gotCc = receipt.ccFound.map { $0.lowercased() }
-    let gotBcc = receipt.bccFound.map { $0.lowercased() }
-    let ccOk = Set(wantCc) == Set(gotCc)
-    let bccOk = Set(wantBcc) == Set(gotBcc)
-    if ccOk && bccOk {
-        return " [recipients_verified: true — cc/bcc addresses read back from the saved draft]"
-    }
-    return " [recipients_verified: false — the saved draft's recipients differ from the request; "
-        + "draft KEPT for you to check; recipients_diff: "
-        + diffLine("cc", wantCc, gotCc) + "; " + diffLine("bcc", wantBcc, gotBcc) + "]"
+/// What the receipt script run produced. Three states, not two (PR #407 R1 #3):
+/// a script that could not run (timeout, Automation refusal, runtime error) is
+/// NOT evidence of absence and must never be reported as "not found" — the
+/// same distinction `ListDraftsScriptBuilder` draws with its 9276 / 9277 codes.
+enum RecipientReceiptFetch: Equatable {
+    case found(RecipientReceipt)
+    case notFound
+    case unavailable(String)
 }
 
-private func diffLine(_ field: String, _ expected: [String], _ found: [String]) -> String {
-    return "\(field) expected [\(expected.joined(separator: ", "))] found [\(found.joined(separator: ", "))]"
+/// The receipt's verdict on the saved draft.
+enum RecipientReceiptOutcome: Equatable {
+    /// cc and bcc address sets both match the request.
+    case verified
+    /// The draft was read and its addresses DIFFER — definitive evidence.
+    case mismatch(diffJSON: String)
+    /// No draft with the subject was found after polling.
+    case notFound(diffJSON: String)
+    /// The receipt script could not run; nothing is established either way.
+    case unavailable(reason: String)
+
+    /// Only a read draft whose addresses differ is definitive; `update_draft`
+    /// gates its delete on this alone (DA, PR #407 R1: gating on `unavailable`
+    /// would leave two drafts on every update for the accounts #406 describes).
+    var isDefinitiveMismatch: Bool {
+        if case .mismatch = self { return true }
+        return false
+    }
+}
+
+/// Compare the caller's intended addresses (display names stripped via
+/// `parseRecipient`) with what the draft holds, case-insensitively and
+/// order-insensitively, and classify the run.
+func recipientReceiptOutcome(
+    expectedCc: [String], expectedBcc: [String], receipt: RecipientReceiptFetch
+) -> RecipientReceiptOutcome {
+    let wantCc = expectedCc.map { parseRecipient($0).address.lowercased() }
+    let wantBcc = expectedBcc.map { parseRecipient($0).address.lowercased() }
+    switch receipt {
+    case .unavailable(let reason):
+        return .unavailable(reason: reason)
+    case .notFound:
+        return .notFound(diffJSON: diffJSON(cc: (wantCc, []), bcc: (wantBcc, [])))
+    case .found(let r):
+        let gotCc = r.ccFound.map { $0.lowercased() }
+        let gotBcc = r.bccFound.map { $0.lowercased() }
+        if Set(wantCc) == Set(gotCc) && Set(wantBcc) == Set(gotBcc) { return .verified }
+        return .mismatch(diffJSON: diffJSON(cc: (wantCc, gotCc), bcc: (wantBcc, gotBcc)))
+    }
+}
+
+/// The disclosure appended to a draft result. Never a failure: a mismatch, a
+/// missing draft, or an unavailable receipt is reported with
+/// `recipients_verified: false` and the draft is KEPT — the failure direction
+/// is always toward keeping drafts (#276). `recipients_diff` is a JSON object
+/// (spec: an object, not prose) so a programmatic caller can parse it.
+func recipientReceiptDisclosure(_ outcome: RecipientReceiptOutcome) -> String {
+    switch outcome {
+    case .verified:
+        return " [recipients_verified: true — cc/bcc addresses read back from the saved draft]"
+    case .mismatch(let json):
+        return " [recipients_verified: false — the saved draft's recipients differ from the request; "
+            + "draft KEPT for you to check; recipients_diff: \(json)]"
+    case .notFound(let json):
+        return " [recipients_verified: false — a draft with this subject was not found in the drafts "
+            + "mailbox after saving; any draft that did land is KEPT; recipients_diff: \(json)]"
+    case .unavailable(let reason):
+        return " [recipients_verified: false — recipients_receipt: unavailable (\(reason)); the "
+            + "receipt script could not run, so nothing is established about the saved recipients "
+            + "— this is NOT a not-found; draft KEPT; check cc/bcc in Mail]"
+    }
+}
+
+/// `{"cc":{"expected":[…],"found":[…]},"bcc":{"expected":[…],"found":[…]}}` —
+/// hand-built so the key order is stable (cc, bcc; expected, found).
+private func diffJSON(cc: ([String], [String]), bcc: ([String], [String])) -> String {
+    func arr(_ xs: [String]) -> String { "[" + xs.map { "\"" + jsonEscape($0) + "\"" }.joined(separator: ",") + "]" }
+    func field(_ pair: ([String], [String])) -> String { "{\"expected\":\(arr(pair.0)),\"found\":\(arr(pair.1))}" }
+    return "{\"cc\":\(field(cc)),\"bcc\":\(field(bcc))}"
+}
+
+private func jsonEscape(_ s: String) -> String {
+    var out = ""
+    for ch in s.unicodeScalars {
+        switch ch {
+        case "\"": out += "\\\""
+        case "\\": out += "\\\\"
+        case "\n": out += "\\n"
+        case "\r": out += "\\r"
+        case "\t": out += "\\t"
+        default:
+            if ch.value < 0x20 { out += String(format: "\\u%04x", ch.value) } else { out.unicodeScalars.append(ch) }
+        }
+    }
+    return out
 }
 
 /// The tag `buildMailtoComposeScript` appends to its return value when the

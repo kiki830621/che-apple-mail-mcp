@@ -358,8 +358,10 @@ extension MailtoComposeTests {
         // two-argument tail (attachments #220 + recipients #251). A bare
         // "attachments: attachments," needle would also match the many
         // composeViaMailto/legacy call sites.
-        let sendTail = "attachments: attachments,\n                recipients: to + (cc ?? []) + (bcc ?? []))"
-        let draftTail = "attachments: attachments,\n                recipients: to + (cc ?? []) + (bcc ?? []),\n                draftMode: true, cc: cc ?? [], bcc: bcc ?? [])"
+        // #404 (PR #407 R1 #9): the three lists are threaded AS three lists —
+        // `to:` / `cc:` / `bcc:` — not concatenated into one `recipients:`.
+        let sendTail = "attachments: attachments,\n                to: to, cc: cc ?? [], bcc: bcc ?? [])"
+        let draftTail = "attachments: attachments,\n                to: to,\n                draftMode: true, cc: cc ?? [], bcc: bcc ?? [])"
         // #304: two probe sites, not four — the `require_wrapper_free` strict
         // branches that duplicated each probe are gone, because refusing IS the
         // behavior now. Both dimensions must still be threaded at both sites.

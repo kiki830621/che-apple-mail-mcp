@@ -29,31 +29,141 @@ final class DraftRecipientReceiptTests: XCTestCase {
         XCTAssertNil(parseRecipientReceipt("NOTFOUND"))
     }
 
-    // MARK: verdict
+    // MARK: verdict (three-state, PR #407 R1 #3)
 
-    func testDisclosure_match_isCaseAndOrderInsensitive() {
-        let d = recipientReceiptDisclosure(
+    func testOutcome_match_isCaseAndOrderInsensitive() {
+        let o = recipientReceiptOutcome(
             expectedCc: ["王小明 <Ming@Example.com>", "b@x.org"], expectedBcc: [],
-            receipt: RecipientReceipt(ccFound: ["b@x.org", "ming@example.com"], bccFound: []))
+            receipt: .found(RecipientReceipt(ccFound: ["b@x.org", "ming@example.com"], bccFound: [])))
+        XCTAssertEqual(o, .verified)
+        let d = recipientReceiptDisclosure(o)
         XCTAssertTrue(d.contains("recipients_verified: true"), d)
         XCTAssertFalse(d.contains("recipients_diff"), d)
     }
 
-    func testDisclosure_diff_listsExpectedAndFound_andKeepsDraft() {
-        let d = recipientReceiptDisclosure(
+    func testOutcome_mismatch_carriesStructuredDiff_asJSON_andKeepsDraft() {
+        let o = recipientReceiptOutcome(
             expectedCc: [], expectedBcc: ["甲 <a@example.org>", "乙 <b@example.org>"],
-            receipt: RecipientReceipt(ccFound: [], bccFound: ["a@example.org"]))
+            receipt: .found(RecipientReceipt(ccFound: [], bccFound: ["a@example.org"])))
+        guard case .mismatch = o else { return XCTFail("expected .mismatch, got \(o)") }
+        let d = recipientReceiptDisclosure(o)
         XCTAssertTrue(d.contains("recipients_verified: false"), d)
-        XCTAssertTrue(d.contains("recipients_diff"), d)
-        XCTAssertTrue(d.contains("bcc expected [a@example.org, b@example.org] found [a@example.org]"), d)
+        // spec: recipients_diff is an OBJECT — emitted as a JSON fragment so a
+        // programmatic caller can parse it instead of substring-matching prose.
+        XCTAssertTrue(d.contains("recipients_diff: {\"cc\":{\"expected\":[],\"found\":[]},\"bcc\":{\"expected\":[\"a@example.org\",\"b@example.org\"],\"found\":[\"a@example.org\"]}}"), d)
         XCTAssertTrue(d.contains("KEPT"), d)
     }
 
-    func testDisclosure_notFound_isFalseAndSaysSo() {
-        let d = recipientReceiptDisclosure(expectedCc: ["a@x.org"], expectedBcc: [], receipt: nil)
+    func testOutcome_notFound_isFalseAndSaysNotFound() {
+        let o = recipientReceiptOutcome(expectedCc: ["a@x.org"], expectedBcc: [], receipt: .notFound)
+        let d = recipientReceiptDisclosure(o)
         XCTAssertTrue(d.contains("recipients_verified: false"), d)
         XCTAssertTrue(d.contains("not found"), d)
         XCTAssertTrue(d.contains("KEPT"), d)
+    }
+
+    func testOutcome_unavailable_neverClaimsNotFound() {
+        // A script failure (timeout, TCC, runtime error) is NOT evidence of absence.
+        let o = recipientReceiptOutcome(expectedCc: ["a@x.org"], expectedBcc: [],
+                                        receipt: .unavailable("AppleScript call did not return within 45s"))
+        let d = recipientReceiptDisclosure(o)
+        XCTAssertTrue(d.contains("recipients_verified: false"), d)
+        XCTAssertTrue(d.contains("recipients_receipt: unavailable"), d)
+        XCTAssertTrue(d.contains("45s"), d)
+        XCTAssertFalse(d.contains("not found"), "a receipt that could not run must not be reported as absence: \(d)")
+        XCTAssertTrue(d.contains("KEPT"), d)
+    }
+
+    func testCreateDraft_receiptScriptThrows_reportsUnavailable_withoutRetry() async throws {
+        final class Counter: @unchecked Sendable { var receiptCalls = 0 }
+        let c = Counter()
+        await MailController.shared.setTestSeams(
+            scriptRunner: { script in
+                if script.contains("#404 recipient receipt") {
+                    c.receiptCalls += 1
+                    throw MailError.scriptTimedOut(seconds: 45, automationGranted: true)
+                }
+                return "Draft created successfully (mailto path)"
+            },
+            refusal: { nil })
+        let r = try await MailController.shared.createDraft(
+            to: ["a@b.c"], subject: "s", body: "b", cc: ["王小明 <ming@example.com>"], bcc: nil)
+        XCTAssertTrue(r.contains("recipients_receipt: unavailable"), r)
+        XCTAssertFalse(r.contains("not found"), r)
+        XCTAssertEqual(c.receiptCalls, 1, "a script failure is not retried — only NOTFOUND polls")
+    }
+
+    func testCreateDraft_fromAddressAndBccReveal_disclosesBoth() async throws {
+        // R1 #1: the sender disclosure used to be appended BEFORE the suffix
+        // check for the script tag, so bcc_field_revealed was lost and the raw
+        // tag leaked whenever from_address was also set.
+        _ = await seams(receipt: "\u{1D}b@example.org",
+                        guiResult: "Draft created successfully (mailto path) [bcc-field-revealed]")
+        let r = try await MailController.shared.createDraft(
+            to: ["a@b.c"], subject: "s", body: "b", cc: nil, bcc: ["密件人 <b@example.org>"],
+            fromAddress: "me@corp.example")
+        XCTAssertTrue(r.contains("sender verified via From popup: me@corp.example"), r)
+        XCTAssertTrue(r.contains("bcc_field_revealed: true"), r)
+        XCTAssertFalse(r.contains("[bcc-field-revealed]"), "raw script tag must never leak: \(r)")
+        XCTAssertTrue(r.contains("recipients_verified: true"), r)
+    }
+
+    func testCreateDraft_mixedNamedAndBareCc_receiptCoversWholeList() async throws {
+        _ = await seams(receipt: "b@example.com\u{1E}ming@example.com\u{1D}")
+        let r = try await MailController.shared.createDraft(
+            to: ["a@b.c"], subject: "s", body: "b", cc: ["王小明 <ming@example.com>", "b@example.com"], bcc: nil)
+        XCTAssertTrue(r.contains("recipients_verified: true"), r)
+    }
+
+    func testUpdateDraft_receiptMismatch_keepsOldDraft() async throws {
+        // R1 #4 (gated on the three-state receipt): a DEFINITIVE mismatch keeps
+        // the old draft — the only copy whose recipients were right — and says so.
+        final class Log: @unchecked Sendable { var deleted = false; var n = 0 }
+        let l = Log()
+        let RS = "\u{1E}", GS = "\u{1D}"
+        let rows = ["101\(RS)102\(GS)A\(RS)B", "101\(RS)102\(GS)A\(RS)B", "101\(RS)102\(RS)999\(GS)A\(RS)B\(RS)s"]
+        await MailController.shared.setTestSeams(
+            scriptRunner: { script in
+                if script.contains("#404 recipient receipt") { return "other@example.com\(GS)" }
+                if script.contains("whose id is") { l.deleted = true; return "Draft deleted" }
+                if script.contains("mailto:") { return "Draft created successfully (mailto path)" }
+                if script.contains("drafts mailbox") { defer { l.n += 1 }; return rows[min(l.n, rows.count - 1)] }
+                return ""
+            },
+            refusal: { nil })
+        let result = try await MailController.shared.updateDraft(
+            draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
+            to: ["a@x.co"], subject: "s", body: "b", cc: ["王小明 <ming@example.com>"], bcc: nil,
+            attachments: nil, format: .plain, fromAddress: nil)
+        XCTAssertEqual(result["deleted_old"] as? Bool, false)
+        XCTAssertFalse(l.deleted, "no delete script may run after a definitive recipient mismatch")
+        XCTAssertTrue((result["note"] as? String ?? "").contains("recipients"), "\(result["note"] ?? "")")
+        XCTAssertTrue((result["new_draft"] as? String ?? "").contains("recipients_verified: false"))
+    }
+
+    func testUpdateDraft_receiptUnavailable_stillDeletesOld() async throws {
+        // DA: gating on "receipt unavailable" would leave two drafts on every
+        // update for the accounts #406 describes — only a definitive mismatch gates.
+        final class Log: @unchecked Sendable { var deleted = false; var n = 0 }
+        let l = Log()
+        let RS = "\u{1E}", GS = "\u{1D}"
+        let rows = ["101\(RS)102\(GS)A\(RS)B", "101\(RS)102\(GS)A\(RS)B", "101\(RS)102\(RS)999\(GS)A\(RS)B\(RS)s"]
+        await MailController.shared.setTestSeams(
+            scriptRunner: { script in
+                if script.contains("#404 recipient receipt") { throw MailError.scriptTimedOut(seconds: 45, automationGranted: true) }
+                if script.contains("whose id is") { l.deleted = true; return "Draft deleted" }
+                if script.contains("mailto:") { return "Draft created successfully (mailto path)" }
+                if script.contains("drafts mailbox") { defer { l.n += 1 }; return rows[min(l.n, rows.count - 1)] }
+                return ""
+            },
+            refusal: { nil })
+        let result = try await MailController.shared.updateDraft(
+            draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
+            to: ["a@x.co"], subject: "s", body: "b", cc: ["王小明 <ming@example.com>"], bcc: nil,
+            attachments: nil, format: .plain, fromAddress: nil)
+        XCTAssertEqual(result["deleted_old"] as? Bool, true)
+        XCTAssertTrue(l.deleted)
+        XCTAssertTrue((result["new_draft"] as? String ?? "").contains("recipients_receipt: unavailable"))
     }
 
     // MARK: createDraft integration through the runner seam
@@ -91,7 +201,7 @@ final class DraftRecipientReceiptTests: XCTestCase {
         let r = try await MailController.shared.createDraft(
             to: ["a@b.c"], subject: "s", body: "b", cc: nil, bcc: ["甲 <a@example.org>", "乙 <b@example.org>"])
         XCTAssertTrue(r.contains("recipients_verified: false"), r)
-        XCTAssertTrue(r.contains("bcc expected [a@example.org, b@example.org] found [a@example.org]"), r)
+        XCTAssertTrue(r.contains("\"bcc\":{\"expected\":[\"a@example.org\",\"b@example.org\"],\"found\":[\"a@example.org\"]}"), r)
         XCTAssertTrue(r.contains("bcc_field_revealed: true"), r)
         XCTAssertFalse(r.contains("[bcc-field-revealed]"), "the raw script tag is translated, not leaked: \(r)")
     }

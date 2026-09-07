@@ -13,14 +13,41 @@ final class ComposeCleanupSheetTests: XCTestCase {
         buildMailtoComposeScript(url: "mailto:a@x?subject=S", subject: "S", attachments: [], send: false)
     }
 
-    func testCleanup_dismissesDiscardSheet_byIdentifierAndDiscardTitle() {
+    func testCleanup_dismissesDiscardSheet_byIdentifierAndExactDiscardTitle() {
         let s = draftScript()
         XCTAssertTrue(s.contains("close _cw saving no"), "the close attempt stays — it is the sheet it triggers that must be handled")
         XCTAssertTrue(s.contains("\"Mail.sendMessageAlert\""), "the sheet is recognized by its AXIdentifier")
         XCTAssertTrue(s.contains("\"不儲存\""), "zh-TW discard title")
-        XCTAssertTrue(s.contains("starts with \"Don"), "English discard title (Don't Save / Don’t Save)")
-        XCTAssertFalse(s.contains("\"儲存\" then click") || s.contains("\"Save\" then click"),
-                       "the save button must never be clicked from cleanup")
+        // R1 #11: `starts with "Don"` also matched "Done". Exact titles only,
+        // both apostrophes macOS uses.
+        XCTAssertTrue(s.contains("\"Don't Save\"") && s.contains("\"Don’t Save\""), s)
+        XCTAssertFalse(s.contains("starts with \"Don"), "prefix match on the discard title is forbidden: \(s)")
+    }
+
+    func testCleanup_everyButtonClickIsGuardedByTheDiscardCondition() {
+        // R1 #12: the old "never clicks save" assertion could not fail (the
+        // generator always puts a newline between `then` and `click`). This
+        // one reads the generated script line by line: every `click _b` must
+        // sit directly under the exact discard-title condition.
+        let lines = draftScript().components(separatedBy: "\n")
+        var clicks = 0
+        for (i, line) in lines.enumerated() where line.trimmingCharacters(in: .whitespaces) == "click _b" {
+            clicks += 1
+            let guardLine = lines[i - 1].trimmingCharacters(in: .whitespaces)
+            XCTAssertEqual(guardLine, "if _bt is \"不儲存\" or _bt is \"Don't Save\" or _bt is \"Don’t Save\" then",
+                           "click _b at line \(i + 1) is not guarded by the discard condition")
+        }
+        XCTAssertEqual(clicks, 1, "exactly one sheet-button click exists in cleanup")
+    }
+
+    func testCleanup_skipsTheSheetWhenTheTitleIsNotUnique() {
+        // R1 #11: the sheet is found through the window TITLE (System Events
+        // cannot see Mail's window ids). If more than one window carries our
+        // subject, the discard click could hit someone else's unsaved message —
+        // so cleanup must refuse to click and fall through to WINDOWLEFTOPEN.
+        let s = draftScript()
+        XCTAssertTrue(s.contains("_titleMatches"), s)
+        XCTAssertTrue(s.contains("if _titleMatches is 1 then"), "the discard click must be gated on title uniqueness: \(s)")
     }
 
     func testCleanup_reportsSurvivingWindowByTitle() {

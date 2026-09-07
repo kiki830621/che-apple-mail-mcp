@@ -20,6 +20,11 @@ actor MailController {
     /// (nil = proceed) instead of probing Accessibility — lets tests select the
     /// branch deterministically.
     private var refusalOverride: (() -> ComposeRefusal?)?
+    /// #404 (PR #407 R1 #4): the recipient receipt's verdict for the most recent
+    /// draft created through `composeViaMailto`, so `updateDraft` can gate its
+    /// delete on a DEFINITIVE mismatch. Actor-isolated; reset at the start of
+    /// every receipt-bearing compose, `nil` when no receipt ran.
+    private var lastRecipientReceiptOutcome: RecipientReceiptOutcome?
 
     /// #287: when set, `openMailtoURL` calls this instead of
     /// `NSWorkspace.shared.open` — lets tests exercise the LaunchServices
@@ -1554,7 +1559,7 @@ actor MailController {
             refusal: composeRefusalForCall(
                 format: format, fromAddress: fromAddress, subject: subject,
                 attachments: attachments,
-                recipients: to + (cc ?? []) + (bcc ?? [])),
+                to: to, cc: cc ?? [], bcc: bcc ?? []),
             cleanPath: {
                 try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
@@ -1578,7 +1583,9 @@ actor MailController {
     /// (`fromAddress`) rides the clean path via the verified From-popup (#219)
     /// when Accessibility is granted. An empty subject refuses (the GUI dispatch
     /// guard identifies our compose window by its title = subject).
-    private func composeRefusalForCall(format: BodyFormat, fromAddress: String?, subject: String, attachments: [String]? = nil, recipients: [String] = [], draftMode: Bool = false, cc: [String] = [], bcc: [String] = []) -> ComposeRefusal? {
+    // PR #407 R1 #9: the three lists are passed AS the three lists — the pure
+    // derivation is per-list, and the 12-cell matrix tests that shape.
+    private func composeRefusalForCall(format: BodyFormat, fromAddress: String?, subject: String, attachments: [String]? = nil, to recipients: [String] = [], draftMode: Bool = false, cc: [String] = [], bcc: [String] = []) -> ComposeRefusal? {
         if let override = refusalOverride { return override() }
         // #404: the derivation is the pure `composeCallRefusal` so the
         // draft/send × to/cc/bcc × bare/named matrix is unit-testable. Reason 6
@@ -1650,18 +1657,22 @@ actor MailController {
         var result = needsClipboard
             ? try withClipboardPreserved({ try runGuiScript(script, timeout: Self.guiScriptTimeout) })
             : try runGuiScript(script, timeout: Self.guiScriptTimeout)
+        // #404: the script tags its return value when it had to reveal the Bcc
+        // field (the View-menu state is deliberately NOT restored — disclose it).
+        // Strip the tag FIRST: it is a suffix of the raw script return, and any
+        // disclosure appended before this check would hide it (PR #407 R1 #1 —
+        // with from_address set the sender disclosure used to land first, so
+        // bcc_field_revealed was lost and the raw tag leaked).
+        var bccRevealed = false
+        if result.hasSuffix(bccFieldRevealedScriptTag) {
+            result.removeLast(bccFieldRevealedScriptTag.count)
+            bccRevealed = true
+        }
         // #219/#277: disclose what the GUI verified/filled so the caller can
         // see the clean path handled the extras (parity with the legacy
         // disclosure discipline, #237).
         if let addr = popupAddress, !addr.isEmpty {
             result += " [sender verified via From popup: \(addr)]"
-        }
-        // #404: the script tags its return value when it had to reveal the Bcc
-        // field (the View-menu state is deliberately NOT restored — disclose it).
-        var bccRevealed = false
-        if result.hasSuffix(bccFieldRevealedScriptTag) {
-            result.removeLast(bccFieldRevealedScriptTag.count)
-            bccRevealed = true
         }
         if !partition.fill.isEmpty {
             let fields = partition.fill.map { $0.field.rawValue }.joined(separator: "/")
@@ -1676,18 +1687,35 @@ actor MailController {
         // request. Draft-only (a send has nothing left to read); never a failure
         // — a mismatch or a missing draft is disclosed and the draft is KEPT.
         let filledCcOrBcc = partition.fill.contains { $0.field == .cc || $0.field == .bcc }
+        lastRecipientReceiptOutcome = nil
         if !send && filledCcOrBcc {
             let receiptScript = buildDraftRecipientReceiptScript(subject: subject)
-            var receipt: RecipientReceipt? = nil
+            // Three states (PR #407 R1 #3): a script FAILURE is recorded as
+            // `unavailable` and never retried — retrying a 45 s timeout three
+            // times stacked ~135 s onto the call (#406) and still said nothing;
+            // only NOTFOUND polls, because the save can land asynchronously.
+            var fetch: RecipientReceiptFetch = .notFound
             for attempt in 0..<3 {
                 if attempt > 0 { Thread.sleep(forTimeInterval: 0.4) }
-                if let raw = try? runScript(receiptScript), let parsed = parseRecipientReceipt(raw) {
-                    receipt = parsed
+                do {
+                    let raw = try runScript(receiptScript)
+                    if let parsed = parseRecipientReceipt(raw) {
+                        fetch = .found(parsed)
+                        break
+                    }
+                    fetch = .notFound
+                } catch {
+                    let reason = error.localizedDescription
+                    _ = Diagnostics.emit(
+                        "recipient receipt for subject \"\(subject)\" could not run: \(reason)\n")
+                    fetch = .unavailable(reason)
                     break
                 }
             }
-            result += recipientReceiptDisclosure(
-                expectedCc: cc ?? [], expectedBcc: bcc ?? [], receipt: receipt)
+            let outcome = recipientReceiptOutcome(
+                expectedCc: cc ?? [], expectedBcc: bcc ?? [], receipt: fetch)
+            lastRecipientReceiptOutcome = outcome
+            result += recipientReceiptDisclosure(outcome)
         }
         return result
     }
@@ -1973,6 +2001,26 @@ actor MailController {
             attachments: attachments, accountName: nil, format: format,
             fromAddress: fromAddress)
 
+        // 2.4 RECIPIENT GATE (#404, PR #407 R1 #4): when the replacement's
+        //     post-save recipient receipt read the draft and its cc/bcc
+        //     addresses DIFFER from the request, the old draft is the only copy
+        //     whose recipients were right — keep it (both drafts exist, the
+        //     caller is told). Only a DEFINITIVE mismatch gates; a receipt that
+        //     could not run (`unavailable`, #406) or found no draft does not,
+        //     or every update on a slow-scan account would leave two drafts.
+        if let receipt = lastRecipientReceiptOutcome, receipt.isDefinitiveMismatch {
+            return [
+                "deleted_old": false,
+                "old_draft_id": old.id,
+                "new_draft": createResult,
+                "note": "the replacement draft was created but its saved cc/bcc recipients differ "
+                    + "from the request (recipients_verified: false) — the OLD draft (id \(old.id)) was "
+                    + "KEPT because it holds the previously verified recipients. Both drafts exist: "
+                    + "check the recipients_diff, fix the wrong one in Mail, then delete the other "
+                    + "(delete_email) yourself.",
+            ]
+        }
+
         // 2.5 RECEIPT (verify R3, DA-2): the GUI mailto create path can
         //     report success after firing keystrokes without the draft
         //     actually landing (phantom success). Deleting on that word
@@ -2071,7 +2119,7 @@ actor MailController {
             refusal: composeRefusalForCall(
                 format: format, fromAddress: fromAddress, subject: subject,
                 attachments: attachments,
-                recipients: to + (cc ?? []) + (bcc ?? []),
+                to: to,
                 draftMode: true, cc: cc ?? [], bcc: bcc ?? []),
             cleanPath: {
                 try composeViaMailto(

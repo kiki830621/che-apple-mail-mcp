@@ -35,9 +35,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when cc/bcc were GUI-filled the newest draft with the exact subject is re-read
   (`considering case`) and its cc/bcc addresses compared with the request. The
   result carries `recipients_verified: true`, or `recipients_verified: false`
-  plus `recipients_diff` — never a failure, the draft is always kept (#276
-  direction). `update_draft` inherits it through `createDraft` with no extra
-  settle. `DraftRecipientReceipt.swift`; `DraftRecipientReceiptTests`.
+  plus a `recipients_diff` JSON object, or `recipients_receipt: unavailable`
+  with the reason when the script itself could not run (a failed script is never
+  reported as "not found" and is not retried — only a not-found result polls) —
+  never a failure, the draft is always kept (#276 direction). `update_draft`
+  inherits it through `createDraft` and keeps the OLD draft (`deleted_old:
+  false` + note) on a definitive mismatch; an unavailable receipt does not gate
+  the delete. The read-back name check applies to named recipients only — a
+  bare address's token is not name-compared because Mail renders a Contacts
+  card's name there; the count stays strict. `DraftRecipientReceipt.swift`;
+  `DraftRecipientReceiptTests`.
 
 ### Changed
 
@@ -55,16 +62,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Pre-dispatch failures no longer leave an orphan compose window**
-  ([#333](https://github.com/PsychQuant/che-apple-mail-mcp/issues/333)). The
-  on-error cleanup closed our window with `close … saving no`, but a mailto
+- **The discard-sheet half of the orphan-window chain**
+  ([#333](https://github.com/PsychQuant/che-apple-mail-mcp/issues/333), partial).
+  The on-error cleanup closed our window with `close … saving no`, but a mailto
   compose window answers that with the "save this message as a draft?" sheet
   (AXIdentifier `Mail.sendMessageAlert`) and stays open behind it — so the next
   attempt found a same-title window and failed too, the chain #333 describes
-  (live-observed 2026-09-07 during the #404 probe). Cleanup now clicks the
-  sheet's *discard* button (`不儲存` / `Don't Save` — never save or cancel),
-  re-checks the window, and appends a `WINDOWLEFTOPEN` note naming the title if
-  it survives. The post-dispatch branch (#242) is untouched.
+  (live-observed 2026-09-07 during the #404 probe). For failures that happen
+  *after* our window was identified (the `raiseOnly` / fill / popup / attach
+  phases), cleanup now clicks the sheet's *discard* button — exact titles
+  `不儲存` / `Don't Save` / `Don’t Save`, never save or cancel, and only when
+  exactly one window carries the subject — re-checks the window, and appends a
+  `WINDOWLEFTOPEN` note naming the title if it survives. Failures *before* the
+  window is identified (a same-title window already open, more than one new
+  window, no new window) still leave the window and stay on #333; the discard
+  title is locale-matched (zh-TW / English), other locales fall through to
+  `WINDOWLEFTOPEN`. The post-dispatch branch (#242) is untouched.
   `ComposeCleanupSheetTests`.
 
 ## [3.0.0] - 2026-08-31

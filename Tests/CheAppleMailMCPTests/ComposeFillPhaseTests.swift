@@ -56,9 +56,32 @@ final class ComposeFillPhaseTests: XCTestCase {
         XCTAssertTrue(s.contains("is not 2"), "expected token count is the recipient count")
     }
 
-    func testReadback_bareAddressExpectsTheAddress_quotedNameIsUnquoted() {
+    func testReadback_bareAddressIsNotNameCompared_quotedNameIsUnquoted() {
+        // R1 #6: Mail renders a bare address that has a Contacts card as the
+        // card's NAME, so a bare address's token value is not an invariant —
+        // only the COUNT is. A bare recipient contributes an empty expectation
+        // (= "any"); a named recipient still expects its display name.
         let s = script([RecipientFill(field: .cc, recipients: ["\"Doe, Jane\" <jane@example.org>", "d3@example.org"])])
-        XCTAssertTrue(s.contains("{\"Doe, Jane\", \"d3@example.org\"}"), s)
+        XCTAssertTrue(s.contains("{\"Doe, Jane\", \"\"}"), s)
+        XCTAssertTrue(s.contains("(item _ti of _expected) is not \"\" and"), "an empty expectation must skip the name comparison: \(s)")
+    }
+
+    func testFieldLookup_isPolled_notSingleShot() {
+        // R1 #13: the AX tree settles for a beat after the window opens
+        // (#295/#296) — To/Cc must be polled like Bcc, not judged on one probe.
+        let s = script([RecipientFill(field: .cc, recipients: ["甲 <a1@example.org>"])])
+        let idx = s.range(of: "my findAddressField(_w, \"Mail.ccField\")")!.lowerBound
+        let start = s.index(idx, offsetBy: -160, limitedBy: s.startIndex) ?? s.startIndex
+        let before = String(s[start..<idx])
+        XCTAssertTrue(before.contains("repeat 12 times"), "field lookup must be inside a poll loop: …\(before)")
+    }
+
+    func testBccReveal_scansOnlyTheViewMenu() {
+        // R1 #10 (DA): the Window menu lists window titles — our own subject —
+        // so a bar-wide fragment scan can click a window entry instead of the
+        // Bcc toggle. The reveal item is looked up only under 顯示方式 / View.
+        let s = script([RecipientFill(field: .bcc, recipients: ["密件人 <bcc@example.org>"])])
+        XCTAssertTrue(s.contains("\"顯示方式\"") && s.contains("\"View\""), s)
     }
 
     // MARK: 2.3 — Bcc reveal, disclosed, not restored

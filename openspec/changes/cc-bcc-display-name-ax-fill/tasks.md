@@ -12,7 +12,7 @@
 ## 3. 存檔後 recipient receipt
 
 - [x] 3.1 `MailController` 在 ⌘S 後、且本次有 display-name cc/bcc fill 時，以 subject 精確比對定位新草稿，讀 `address of every cc recipient` / `bcc recipient`，與意圖位址集合比對；相符 → result `recipients_verified: true`，不符或找不到 → `recipients_verified: false` + `recipients_diff`（expected / found），草稿不刪、呼叫不視為失敗；純位址呼叫不執行 receipt、result 無此欄位。驗證：以 runner seam（#185 的 `runScript` 注入）餵假 drafts 列表的單元測試覆蓋 match / diff / not-found / not-applicable 四例，對應 spec「Draft recipient receipt verifies addresses after save」。
-- [x] 3.2 update_draft 自動繼承：其既有 post-create receipt（新 id 出現）與 recipient receipt 合併為同一次 drafts 讀取，不疊兩層 settle；`deleted_old` 語意不變。驗證：`update_draft` 既有測試全綠 + 新增一例 named cc 走 update 路徑回傳同時含 `deleted_old` 與 `recipients_verified`。
+- [x] 3.2 update_draft 自動繼承：recipient receipt 在 `createDraft` 內執行，其既有 post-create id receipt 另跑一次（兩個腳本、未合併——合併列 #409）；不疊額外 settle（id receipt 首輪即命中）；`deleted_old` 在 receipt 確定 mismatch 時改為 false 並保留舊稿（PR #407 R1 #4）。驗證：`update_draft` 既有測試全綠 + 新增一例 named cc 走 update 路徑回傳同時含 `deleted_old` 與 `recipients_verified`。
 
 ## 4. cleanup 收掉 discard sheet（#333）
 
