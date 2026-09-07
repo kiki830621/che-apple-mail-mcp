@@ -279,6 +279,61 @@ func containsUnquotedAngle(_ s: String) -> Bool {
     return inQuote && angleInOpenQuote
 }
 
+// MARK: - #404 AX-addressed recipient fill
+
+/// #404 — a compose-window address field, addressed by the stable,
+/// locale-independent AXIdentifier Mail assigns it (live-observed on Mail,
+/// macOS 27, 2026-09-07 — #404 Diagnosis P1). The identifier is what the fill
+/// phase focuses; it is never located by Tab order.
+enum AddressField: String, CaseIterable, Equatable {
+    case to, cc, bcc
+
+    var axIdentifier: String {
+        switch self {
+        case .to: return "Mail.toField"
+        case .cc: return "Mail.ccField"
+        case .bcc: return "Mail.bccField"
+        }
+    }
+
+    /// The View-menu item name fragments that reveal this field when Mail
+    /// hides it. Only Bcc is hidden by default; `to` is always shown.
+    var revealMenuNameFragments: [String] {
+        switch self {
+        case .to: return []
+        case .cc: return ["副本", "Cc Address Field"]
+        case .bcc: return ["密件副本", "Bcc"]
+        }
+    }
+}
+
+/// One address field to fill through the GUI: the whole list for that field,
+/// in caller order (bare + named tokenize alike once pasted).
+struct RecipientFill: Equatable {
+    let field: AddressField
+    let recipients: [String]
+}
+
+/// #404 — split the three recipient lists between the `mailto:` URL and the
+/// GUI fill. A list rides the URL only when every entry is a bare addr-spec
+/// (RFC 6068 carries no display names); a list with ANY display name is omitted
+/// from the URL as a whole and filled through its AX-addressed field, so no
+/// recipient is carried twice and none is dropped. Fill order is to, cc, bcc.
+func partitionRecipientsForMailto(
+    to: [String], cc: [String], bcc: [String]
+) -> (urlTo: [String], urlCc: [String], urlBcc: [String], fill: [RecipientFill]) {
+    var fill: [RecipientFill] = []
+    func route(_ field: AddressField, _ list: [String]) -> [String] {
+        guard !list.isEmpty, anyRecipientHasDisplayName(list) else { return list }
+        fill.append(RecipientFill(field: field, recipients: list))
+        return []
+    }
+    let urlTo = route(.to, to)
+    let urlCc = route(.cc, cc)
+    let urlBcc = route(.bcc, bcc)
+    return (urlTo, urlCc, urlBcc, fill)
+}
+
 /// #251 — true iff any recipient in the given lists carries a display name.
 func anyRecipientHasDisplayName(_ recipients: [String]?) -> Bool {
     guard let recipients else { return false }

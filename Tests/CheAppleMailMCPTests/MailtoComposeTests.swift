@@ -485,14 +485,14 @@ extension MailtoComposeTests {
     }
 
     func testMailtoScript_fillTo_orderingAndEscaping() {
-        // #277 (+ verify, Codex): fill is TO-ONLY (Cc removed — a hidden Cc
-        // field would silently drop names). The To fill runs BEFORE the popup
-        // phase (fresh window's default To focus) and before dispatch. Quotes
-        // in display names are AppleScript-escaped.
+        // #277 (+ verify, Codex) → #404: the fill runs BEFORE the popup phase
+        // and before dispatch; since #404 every field (to/cc/bcc) is addressed
+        // by AXIdentifier rather than relying on the fresh window's default To
+        // focus. Quotes in display names are AppleScript-escaped.
         let script = buildMailtoComposeScript(
             url: "mailto:?subject=S", subject: "S", attachments: [],
             send: false, fromAddress: "me@corp.example",
-            fillToRecipients: ["\"Wang, X\" <w@x.example>"])
+            fill: [RecipientFill(field: .to, recipients: ["\"Wang, X\" <w@x.example>"])])
         XCTAssertTrue(script.contains("keystroke tab"))
         XCTAssertTrue(script.contains("\\\"Wang, X\\\" <w@x.example>"),
                       "display-name quotes must be AppleScript-escaped in the clipboard literal")

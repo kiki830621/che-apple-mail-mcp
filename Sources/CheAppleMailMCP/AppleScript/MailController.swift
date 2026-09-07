@@ -1606,13 +1606,12 @@ actor MailController {
         cc: [String]?, bcc: [String]?, attachments: [String]?, send: Bool,
         fromAddress: String? = nil
     ) throws -> String {
-        // #277: display-name To can't ride the mailto URL (RFC 6068). When the
-        // To list carries ANY display name, the WHOLE To list goes through the
-        // GUI clipboard-fill phase (order preserved; bare + named tokenize
-        // alike) and the URL omits To. Cc is NEVER GUI-filled (#277 verify,
-        // Codex: a hidden Cc field would silently drop names), so eligibility
-        // guarantees cc here has no display names and cc always rides the URL.
-        let fillTo = anyRecipientHasDisplayName(to) ? to : []
+        // #277/#404: a display name can't ride the mailto URL (RFC 6068). Any
+        // list carrying a display name is omitted from the URL as a whole and
+        // filled through its AX-addressed field (order preserved; bare + named
+        // tokenize alike). Cc/Bcc joined To here in #404 — the field is located
+        // by AXIdentifier, so a hidden field fails loud instead of misfiring.
+        let partition = partitionRecipientsForMailto(to: to, cc: cc ?? [], bcc: bcc ?? [])
         // #277 defense-in-depth (verify R1 + R2, Codex): display-name fill is
         // DRAFT-ONLY. Eligibility already routes a send with ANY display-name
         // recipient (To/Cc/Bcc) to the legacy path, so this is unreachable — but
@@ -1627,8 +1626,8 @@ actor MailController {
                 "internal: display-name recipient on a send reached the clean path — refusing "
                 + "(display-name recipients are draft-only on the clean path, #277)")
         }
-        let urlTo = fillTo.isEmpty ? to : []
-        let url = buildMailtoURL(to: urlTo, subject: subject, body: body, cc: cc, bcc: bcc)
+        let url = buildMailtoURL(to: partition.urlTo, subject: subject, body: body,
+                                 cc: partition.urlCc, bcc: partition.urlBcc)
         guard url.count <= maxMailtoURLLength else {
             throw MailError.scriptFailed(
                 message: "mailto URL too long (\(url.count) > \(maxMailtoURLLength) chars)",
@@ -1642,8 +1641,8 @@ actor MailController {
         let popupAddress = fromAddress.map { parseRecipient($0).address }
         let script = buildMailtoComposeScript(
             url: url, subject: subject, attachments: attachments ?? [], send: send,
-            fromAddress: popupAddress, fillToRecipients: fillTo)
-        let needsClipboard = attachments?.isEmpty == false || !fillTo.isEmpty
+            fromAddress: popupAddress, fill: partition.fill)
+        let needsClipboard = attachments?.isEmpty == false || !partition.fill.isEmpty
         // #301: the whole keystroke flow is ONE script with deliberate per-phase
         // delays — on a large mailbox a HEALTHY run crosses the 45s default, so
         // it gets the GUI deadline (the default killed it mid-flight and the
@@ -1657,8 +1656,9 @@ actor MailController {
         if let addr = popupAddress, !addr.isEmpty {
             result += " [sender verified via From popup: \(addr)]"
         }
-        if !fillTo.isEmpty {
-            result += " [display-name To recipients GUI-filled (draft-only, #277) — verify To in the draft]"
+        if !partition.fill.isEmpty {
+            let fields = partition.fill.map { $0.field.rawValue }.joined(separator: "/")
+            result += " [display-name \(fields) recipients GUI-filled via AX-addressed fields (draft-only, #277/#404)]"
         }
         return result
     }

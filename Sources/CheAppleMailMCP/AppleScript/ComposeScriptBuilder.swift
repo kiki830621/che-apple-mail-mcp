@@ -139,7 +139,7 @@ func buildMailtoComposeScript(
     attachments: [String],
     send: Bool,
     fromAddress: String? = nil,
-    fillToRecipients: [String] = []
+    fill: [RecipientFill] = []
 ) -> String {
     let windowDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_WINDOW_DELAY", fallback: 1.8)
     let stepDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_STEP_DELAY", fallback: 0.7)
@@ -188,6 +188,58 @@ func buildMailtoComposeScript(
     // errors. Flag initialized BEFORE the outer try so the handler can always
     // reference it.
     let flagInit = send ? "set _dispatched to false\n    " : ""
+    // #404: `_bccRevealed` is read by the return statement, so it is
+    // initialized before the outer try (same reason as `_dispatched`).
+    let fillsBcc = fill.contains { $0.field == .bcc }
+    let bccFlagInit = fillsBcc ? "set _bccRevealed to false\n    " : ""
+
+    // #404: handlers for the AX-addressed fill phase. `findAddressField` scans
+    // the compose window's text fields for a stable AXIdentifier (indexed +
+    // guarded, #295 — a for-in item-fetch throws -2700 on a settling AX tree);
+    // `findMenuItemNamed` scans every menu-bar menu for an item whose name
+    // contains one of the locale fragments (the View menu is "顯示方式" on a
+    // zh-TW Mail, "View" elsewhere — the item is matched, not the menu).
+    let fillHandlers = fill.isEmpty ? "" : """
+    on findAddressField(_w, _idf)
+        tell application "System Events"
+            tell process "Mail"
+                set _tfTotal to 0
+                try
+                    set _tfTotal to (count of text fields of _w)
+                end try
+                repeat with _tfi from 1 to _tfTotal
+                    try
+                        set _tf to text field _tfi of _w
+                        if (value of attribute "AXIdentifier" of _tf) is _idf then return _tf
+                    end try
+                end repeat
+            end tell
+        end tell
+        return missing value
+    end findAddressField
+
+    on findMenuItemNamed(_frags)
+        tell application "System Events"
+            tell process "Mail"
+                repeat with _mbi in menu bar items of menu bar 1
+                    try
+                        repeat with _mi in menu items of menu 1 of _mbi
+                            set _nm to ""
+                            try
+                                set _nm to (name of _mi as text)
+                            end try
+                            repeat with _f in _frags
+                                if _nm contains (_f as text) then return _mi
+                            end repeat
+                        end repeat
+                    end try
+                end repeat
+            end tell
+        end tell
+        return missing value
+    end findMenuItemNamed
+
+    """
 
     // 1. Capture Mail window ids BEFORE the mailto, hand it off, then identify
     // OUR compose window as the NEW window (id unseen before) whose title is our
@@ -237,7 +289,7 @@ func buildMailtoComposeScript(
     end senderMatches
 
     """ : ""
-    var s = senderMatchHandler + """
+    var s = fillHandlers + senderMatchHandler + """
     tell application "Mail"
         set _wc to (count of windows)
         set _beforeIds to (id of every window)
@@ -262,7 +314,7 @@ func buildMailtoComposeScript(
         if _ourMatches is 0 then error "could not identify our new compose window by subject after mailto (safe fallback)"
         if _ourMatches > 1 then error "more than one new window is titled the subject — cannot safely identify our compose window (safe fallback)"
     end tell
-    \(flagInit)try
+    \(flagInit)\(bccFlagInit)try
         tell application "System Events"
             tell process "Mail"
                 set frontmost to true
@@ -271,36 +323,94 @@ func buildMailtoComposeScript(
         end tell
     """
 
-    // 1.5 (#277): display-name recipient fill via clipboard paste — TO ONLY.
-    // The mailto URL omits any display-name-carrying To list (a name can't ride
-    // RFC 6068; pasting `Name <addr>` lets Mail tokenize natively). A fresh
-    // compose window focuses the To field by default, so the fill pastes into
-    // it and tabs to tokenize. Paste, not keystroke: CJK names via keystroke
-    // hit IME nondeterminism (#220 lesson); the Swift caller wraps the run in
-    // withClipboardPreserved.
+    // 1.5 (#277 → #404): display-name recipient fill via clipboard paste,
+    // one address field at a time, each ADDRESSED BY ITS AXIdentifier.
+    // The mailto URL omits any display-name-carrying list (a name can't ride
+    // RFC 6068; pasting `Name <addr>` lets Mail tokenize natively). Paste, not
+    // keystroke: CJK names via keystroke hit IME nondeterminism (#220 lesson);
+    // the Swift caller wraps the run in withClipboardPreserved. Paste, not AX
+    // `set value`: the live probe (#404, 2026-09-07) showed `set value` with a
+    // comma list of NAMED recipients collapses into ONE token — the silent
+    // recipient loss this phase exists to prevent.
     //
-    // Cc is DELIBERATELY not filled here (#277 verify, Codex BLOCKING): Mail's
-    // Cc field can be hidden via Header Fields, so a Tab-to-Cc + paste would
-    // silently land in Subject/elsewhere and the draft would save with NO Cc
-    // (silent recipient loss). To is always visible + default-focused; Cc is
-    // not reliably targetable. So display-name Cc keeps the LEGACY path (which
-    // sets Cc names natively) — enforced by eligibility (displayNameFillViable
-    // requires a display-name-free cc). Any window-identity failure errors out
-    // pre-dispatch → cleanup closes OUR new window → legacy fallback.
+    // #277 verify (Codex BLOCKING) excluded Cc because a Tab-to-Cc + paste
+    // could land in Subject when the field is hidden. #404 answers that by
+    // focusing the field through its AXIdentifier (Mail.toField / Mail.ccField
+    // / Mail.bccField): a hidden or renamed field is NOT FOUND → FILLFIELD
+    // error → pre-dispatch cleanup → named refusal. Bcc, hidden by default, is
+    // revealed on demand through the View menu (BCCREVEAL on failure) and is
+    // deliberately NOT hidden again — the caller learns it via the
+    // `[bcc-field-revealed]` tag on the return value.
+    //
+    // After each paste + Tab the field's tokens are read back (FILLREADBACK):
+    // count must equal the recipient count and each token's AXValue must equal
+    // the recipient's display name (its address when bare). The token exposes
+    // no address over AX, so the addresses themselves are verified after the
+    // save by the Swift-side recipient receipt.
     // Draft-only by design (#277): send:true never reaches this phase — a
     // failed fill on a send would fire with missing recipients.
-    if !fillToRecipients.isEmpty {
-        let toLine = fillToRecipients.joined(separator: ", ")
+    for entry in fill {
+        let idf = entry.field.axIdentifier
+        let line = entry.recipients.joined(separator: ", ")
+        let expectedNames = entry.recipients.map { r -> String in
+            let parsed = parseRecipient(r)
+            return "\"" + appleScriptEscape(parsed.name ?? parsed.address) + "\""
+        }.joined(separator: ", ")
+        let expectedCount = entry.recipients.count
+        let reveal: String
+        if entry.field == .bcc {
+            let frags = entry.field.revealMenuNameFragments
+                .map { "\"" + appleScriptEscape($0) + "\"" }.joined(separator: ", ")
+            // The human-readable list goes INSIDE a string literal, so it must
+            // not carry the literal quotes of the AppleScript list above
+            // (osacompile: "Expected end of line but found unknown token").
+            let fragsPlain = appleScriptEscape(entry.field.revealMenuNameFragments.joined(separator: " / "))
+            reveal = """
+
+                if _fld is missing value then
+                    set _revealItem to my findMenuItemNamed({\(frags)})
+                    if _revealItem is missing value then error "BCCREVEAL: no View menu item reveals the Bcc address field (looked for \(fragsPlain))"
+                    click _revealItem
+                    repeat 12 times
+                        set _fld to my findAddressField(_w, "\(idf)")
+                        if _fld is not missing value then exit repeat
+                        delay 0.3
+                    end repeat
+                    if _fld is missing value then error "BCCREVEAL: the Bcc address field (\(idf)) did not appear after revealing it"
+                    set _bccRevealed to true
+                end if
+        """
+        } else {
+            reveal = ""
+        }
         s += """
 
-        set the clipboard to "\(appleScriptEscape(toLine))"
+        set the clipboard to "\(appleScriptEscape(line))"
         tell application "System Events"
             tell process "Mail"
                 set frontmost to true
                 \(raiseOnly)
+                set _fld to my findAddressField(_w, "\(idf)")\(reveal)
+                if _fld is missing value then error "FILLFIELD: address field \(idf) not found on the compose window — cannot fill \(entry.field.rawValue) display-name recipients"
+                set focused of _fld to true
+                delay 0.25
                 keystroke "v" using command down
                 delay \(stepDelay)
                 keystroke tab
+                delay \(stepDelay)
+                set _expected to {\(expectedNames)}
+                set _tokTotal to 0
+                try
+                    set _tokTotal to (count of UI elements of _fld)
+                end try
+                if _tokTotal is not \(expectedCount) then error "FILLREADBACK: \(idf) holds " & _tokTotal & " recipient tokens, expected \(expectedCount)"
+                repeat with _ti from 1 to _tokTotal
+                    set _tokVal to ""
+                    try
+                        set _tokVal to (value of UI element _ti of _fld as text)
+                    end try
+                    if _tokVal is not (item _ti of _expected) then error "FILLREADBACK: \(idf) token " & _ti & " reads \\"" & _tokVal & "\\", expected \\"" & (item _ti of _expected) & "\\""
+                end repeat
             end tell
         end tell
         delay \(stepDelay)
@@ -555,7 +665,7 @@ func buildMailtoComposeScript(
     on error _mErr
     \(handlerBlock)
     end try\(postTryTail)
-    return "\(dispatchLabel)"
+    \(fillsBcc ? "set _bccTag to \"\"\n    if _bccRevealed then set _bccTag to \" [bcc-field-revealed]\"\n    return \"\(dispatchLabel)\" & _bccTag" : "return \"\(dispatchLabel)\"")
     """
     return s
 }

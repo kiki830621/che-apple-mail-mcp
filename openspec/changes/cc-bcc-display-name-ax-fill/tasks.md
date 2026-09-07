@@ -1,13 +1,13 @@
 ## 1. Eligibility：第 6 類 ineligibility 改為 send-only
 
 - [x] 1.1 `composeRefusal` 的 `displayNameFillViable` 只由 `draftMode` 決定，`composeRefusalForCall` 不再檢查 cc/bcc 顯示名；`ComposeRefusal.displayNameRecipient.message` 改為 send-only 語意並指向 `create_draft`。驗證：`MailtoComposeTests` 新增 refusal 矩陣（draft/send × to/cc/bcc × bare/named，12 格）— draft × named 全部回 nil、send × named 全部回 `.displayNameRecipient`，對應 spec「Ineligible composing calls fail without side effects」與「From-scratch composing tools accept cc and bcc recipients」。
-- [ ] 1.2 `composeViaMailto` 對 send 的 defense-in-depth guard 維持覆蓋三個清單；`urlTo` / `urlCc` / `urlBcc` 在該清單含顯示名時整段省略。驗證：`buildMailtoURL` 測試 — `cc` 含顯示名時 URL 無 `cc=`，純位址時有。
+- [x] 1.2 `composeViaMailto` 對 send 的 defense-in-depth guard 維持覆蓋三個清單；`urlTo` / `urlCc` / `urlBcc` 在該清單含顯示名時整段省略。驗證：`buildMailtoURL` 測試 — `cc` 含顯示名時 URL 無 `cc=`，純位址時有。
 
 ## 2. Fill phase：AX 聚焦取代 Tab 盲跳、貼上而非 set value
 
-- [ ] 2.1 [P] `ComposeScriptBuilder` 的 fill 輸入改為 per-field 結構（`AddressField` 枚舉 `to / cc / bcc` → `Mail.toField` / `Mail.ccField` / `Mail.bccField`），每個欄位生成「依 AXIdentifier 取元素 → `set focused` → ⌘V → Tab」的 AppleScript 片段，不含任何 `set value`。驗證：script builder golden 測試 — 含 cc fill 時輸出含 `"Mail.ccField"` 與 `set focused`，且整份 script 不含 `set value of`；To-only 輸入的輸出與現行 golden 逐字相同。
-- [ ] 2.2 [P] AX token read-back 為 pre-dispatch gate：每個欄位 Tab 之後生成「讀 `UI elements` count 與各 child `AXValue`」的比對片段，期望值由 Swift 端依 `parseRecipient` 算出（有顯示名 → 顯示名；無 → 位址），不符 → `error` 帶 pre-dispatch sentinel。驗證：golden 測試 — 兩個 named cc 時 script 含期望 count `2` 與兩個顯示名字面值；`"Doe, Jane" <jane@…>` 的期望值為 `Doe, Jane`（引號已剝），對應 spec「Draft display-name recipients are filled through AX-addressed fields」。
-- [ ] 2.3 Bcc 欄位揭露不還原：`Mail.bccField` 不存在時生成「click 顯示方式選單中名稱含『密件副本』或『Bcc』的 item → 輪詢欄位出現（沿用 From-popup 輪詢上限）」片段，成功時設旗標供 result 帶 `bcc_field_revealed: true`，找不到 item 或逾時 → 具名 error；不生成第二次 click。驗證：golden 測試 — bcc fill 分支含選單 click 與輪詢、不含還原 click；Swift 端 result 組裝測試含 `bcc_field_revealed`，對應 spec「Bcc field is revealed on demand and disclosed, not restored」。
+- [x] 2.1 [P] `ComposeScriptBuilder` 的 fill 輸入改為 per-field 結構（`AddressField` 枚舉 `to / cc / bcc` → `Mail.toField` / `Mail.ccField` / `Mail.bccField`），每個欄位生成「依 AXIdentifier 取元素 → `set focused` → ⌘V → Tab」的 AppleScript 片段，不含任何 `set value`。驗證：script builder golden 測試 — 含 cc fill 時輸出含 `"Mail.ccField"` 與 `set focused`，且整份 script 不含 `set value of`；To-only 輸入仍通過既有 fill 測試（keystroke tab、引號轉義、先於 popup）；既有 To 路徑亦改為 AX 聚焦。
+- [x] 2.2 [P] AX token read-back 為 pre-dispatch gate：每個欄位 Tab 之後生成「讀 `UI elements` count 與各 child `AXValue`」的比對片段，期望值由 Swift 端依 `parseRecipient` 算出（有顯示名 → 顯示名；無 → 位址），不符 → `error` 帶 pre-dispatch sentinel。驗證：golden 測試 — 兩個 named cc 時 script 含期望 count `2` 與兩個顯示名字面值；`"Doe, Jane" <jane@…>` 的期望值為 `Doe, Jane`（引號已剝），對應 spec「Draft display-name recipients are filled through AX-addressed fields」。
+- [x] 2.3 Bcc 欄位揭露不還原：`Mail.bccField` 不存在時生成「click 顯示方式選單中名稱含『密件副本』或『Bcc』的 item → 輪詢欄位出現（沿用 From-popup 輪詢上限）」片段，成功時設旗標供 result 帶 `bcc_field_revealed: true`，找不到 item 或逾時 → 具名 error；不生成第二次 click。驗證：golden 測試 — bcc fill 分支含選單 click 與輪詢、不含還原 click；Swift 端 result 組裝測試含 `bcc_field_revealed`，對應 spec「Bcc field is revealed on demand and disclosed, not restored」。
 
 ## 3. 存檔後 recipient receipt
 
