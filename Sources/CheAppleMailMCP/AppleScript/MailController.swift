@@ -1656,9 +1656,38 @@ actor MailController {
         if let addr = popupAddress, !addr.isEmpty {
             result += " [sender verified via From popup: \(addr)]"
         }
+        // #404: the script tags its return value when it had to reveal the Bcc
+        // field (the View-menu state is deliberately NOT restored — disclose it).
+        var bccRevealed = false
+        if result.hasSuffix(bccFieldRevealedScriptTag) {
+            result.removeLast(bccFieldRevealedScriptTag.count)
+            bccRevealed = true
+        }
         if !partition.fill.isEmpty {
             let fields = partition.fill.map { $0.field.rawValue }.joined(separator: "/")
             result += " [display-name \(fields) recipients GUI-filled via AX-addressed fields (draft-only, #277/#404)]"
+        }
+        if bccRevealed {
+            result += " [bcc_field_revealed: true — Mail's Bcc address field was shown via View ▸ Bcc Address Field and left visible]"
+        }
+        // #404 recipient receipt: the AX read-back verified token count + display
+        // names, but a token exposes no address, so when cc/bcc were GUI-filled
+        // the saved draft is re-read and its cc/bcc ADDRESSES compared with the
+        // request. Draft-only (a send has nothing left to read); never a failure
+        // — a mismatch or a missing draft is disclosed and the draft is KEPT.
+        let filledCcOrBcc = partition.fill.contains { $0.field == .cc || $0.field == .bcc }
+        if !send && filledCcOrBcc {
+            let receiptScript = buildDraftRecipientReceiptScript(subject: subject)
+            var receipt: RecipientReceipt? = nil
+            for attempt in 0..<3 {
+                if attempt > 0 { Thread.sleep(forTimeInterval: 0.4) }
+                if let raw = try? runScript(receiptScript), let parsed = parseRecipientReceipt(raw) {
+                    receipt = parsed
+                    break
+                }
+            }
+            result += recipientReceiptDisclosure(
+                expectedCc: cc ?? [], expectedBcc: bcc ?? [], receipt: receipt)
         }
         return result
     }

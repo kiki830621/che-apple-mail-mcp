@@ -625,6 +625,15 @@ func buildMailtoComposeScript(
     // unconditional cleanup (AppleScript-equivalent to the pre-#242 script;
     // the cleanupBody extraction shifts leading whitespace, which AppleScript
     // ignores — verify #242, regression lens).
+    // #333/#404: a mailto compose window does NOT close on `saving no` — Mail
+    // answers with the "save this message as a draft?" sheet (AXIdentifier
+    // Mail.sendMessageAlert; live probe 2026-09-07) and the window stays
+    // behind it, which is how a pre-dispatch abort used to leave an orphan
+    // window that made the next attempt fail on "same-title window exists"
+    // (#333). Cleanup therefore dismisses the sheet through its DISCARD
+    // button (title 不儲存 / Don't Save — never the save or cancel buttons),
+    // re-checks that our window is gone, and otherwise appends a
+    // WINDOWLEFTOPEN note to the error so the caller knows to close it.
     let cleanupBody = """
             tell application "Mail"
                 repeat with _cw in windows
@@ -633,6 +642,40 @@ func buildMailtoComposeScript(
                     end try
                 end repeat
             end tell
+            delay 0.4
+            tell application "System Events"
+                tell process "Mail"
+                    repeat with _cw2 in windows
+                        try
+                            if (title of _cw2) is "\(subjEsc)" and (count of sheets of _cw2) > 0 then
+                                set _sh to sheet 1 of _cw2
+                                if (value of attribute "AXIdentifier" of _sh) is "Mail.sendMessageAlert" then
+                                    repeat with _b in buttons of _sh
+                                        set _bt to ""
+                                        try
+                                            set _bt to (title of _b as text)
+                                        end try
+                                        if _bt is "不儲存" or _bt starts with "Don" then
+                                            click _b
+                                            exit repeat
+                                        end if
+                                    end repeat
+                                end if
+                            end if
+                        end try
+                    end repeat
+                end tell
+            end tell
+            delay 0.4
+            set _stillOpen to false
+            tell application "Mail"
+                repeat with _cw in windows
+                    try
+                        if (id of _cw) is _ourId then set _stillOpen to true
+                    end try
+                end repeat
+            end tell
+            if _stillOpen then set _mErr to (_mErr as text) & " — WINDOWLEFTOPEN: the compose window titled \\"\(subjEsc)\\" was left open (its discard sheet could not be dismissed); close it in Mail before retrying"
     """
     // send:true handler: three branches, all rethrow — sentinel-marked errors
     // (keystroke) pass through untouched; unmarked errors with the flag set

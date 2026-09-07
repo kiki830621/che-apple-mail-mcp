@@ -11,12 +11,12 @@
 
 ## 3. 存檔後 recipient receipt
 
-- [ ] 3.1 `MailController` 在 ⌘S 後、且本次有 display-name cc/bcc fill 時，以 subject 精確比對定位新草稿，讀 `address of every cc recipient` / `bcc recipient`，與意圖位址集合比對；相符 → result `recipients_verified: true`，不符或找不到 → `recipients_verified: false` + `recipients_diff`（expected / found），草稿不刪、呼叫不視為失敗；純位址呼叫不執行 receipt、result 無此欄位。驗證：以 runner seam（#185 的 `runScript` 注入）餵假 drafts 列表的單元測試覆蓋 match / diff / not-found / not-applicable 四例，對應 spec「Draft recipient receipt verifies addresses after save」。
-- [ ] 3.2 update_draft 自動繼承：其既有 post-create receipt（新 id 出現）與 recipient receipt 合併為同一次 drafts 讀取，不疊兩層 settle；`deleted_old` 語意不變。驗證：`update_draft` 既有測試全綠 + 新增一例 named cc 走 update 路徑回傳同時含 `deleted_old` 與 `recipients_verified`。
+- [x] 3.1 `MailController` 在 ⌘S 後、且本次有 display-name cc/bcc fill 時，以 subject 精確比對定位新草稿，讀 `address of every cc recipient` / `bcc recipient`，與意圖位址集合比對；相符 → result `recipients_verified: true`，不符或找不到 → `recipients_verified: false` + `recipients_diff`（expected / found），草稿不刪、呼叫不視為失敗；純位址呼叫不執行 receipt、result 無此欄位。驗證：以 runner seam（#185 的 `runScript` 注入）餵假 drafts 列表的單元測試覆蓋 match / diff / not-found / not-applicable 四例，對應 spec「Draft recipient receipt verifies addresses after save」。
+- [x] 3.2 update_draft 自動繼承：其既有 post-create receipt（新 id 出現）與 recipient receipt 合併為同一次 drafts 讀取，不疊兩層 settle；`deleted_old` 語意不變。驗證：`update_draft` 既有測試全綠 + 新增一例 named cc 走 update 路徑回傳同時含 `deleted_old` 與 `recipients_verified`。
 
 ## 4. cleanup 收掉 discard sheet（#333）
 
-- [ ] 4.1 on-error cleanup 在 `close _cw saving no` 之後：若 `_cw` 仍存在且 `sheet 1` 的 AXIdentifier 為 `Mail.sendMessageAlert`，click title 為「不儲存」或以「Don」開頭的 button，再確認 `_cw` 不存在；仍存在 → 原錯誤訊息附加「compose 視窗殘留：<title>」。驗證：golden 測試 — cleanup 片段含 `Mail.sendMessageAlert` 與兩種按鈕 title 比對、不含「儲存」/「Save」按鈕的 click；error 訊息組裝測試覆蓋殘留註記，對應 spec「Compose-window cleanup dismisses the discard-draft sheet」。
+- [x] 4.1 on-error cleanup 在 `close _cw saving no` 之後：若 `_cw` 仍存在且 `sheet 1` 的 AXIdentifier 為 `Mail.sendMessageAlert`，click title 為「不儲存」或以「Don」開頭的 button，再確認 `_cw` 不存在；仍存在 → 原錯誤訊息附加「compose 視窗殘留：<title>」。驗證：golden 測試 — cleanup 片段含 `Mail.sendMessageAlert` 與兩種按鈕 title 比對、不含「儲存」/「Save」按鈕的 click；error 訊息組裝測試覆蓋殘留註記，對應 spec「Compose-window cleanup dismisses the discard-draft sheet」。
 
 ## 5. Description、rules、CHANGELOG
 
