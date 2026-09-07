@@ -2015,7 +2015,8 @@ actor MailController {
                 "new_draft": createResult,
                 "note": "the replacement draft was created but its saved cc/bcc recipients differ "
                     + "from the request (recipients_verified: false) — the OLD draft (id \(old.id)) was "
-                    + "KEPT because it holds the previously verified recipients. Both drafts exist: "
+                    + "KEPT because it holds the previously verified recipients. The replacement was "
+                    + "reported created (not yet confirmed by the id receipt), so both drafts MAY exist: "
                     + "check the recipients_diff, fix the wrong one in Mail, then delete the other "
                     + "(delete_email) yourself.",
             ]
