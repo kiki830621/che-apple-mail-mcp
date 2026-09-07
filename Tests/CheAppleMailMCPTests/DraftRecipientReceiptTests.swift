@@ -137,8 +137,49 @@ final class DraftRecipientReceiptTests: XCTestCase {
             attachments: nil, format: .plain, fromAddress: nil)
         XCTAssertEqual(result["deleted_old"] as? Bool, false)
         XCTAssertFalse(l.deleted, "no delete script may run after a definitive recipient mismatch")
-        XCTAssertTrue((result["note"] as? String ?? "").contains("recipients"), "\(result["note"] ?? "")")
+        let note = result["note"] as? String ?? ""
+        XCTAssertTrue(note.contains("recipients"), note)
+        // R2-1 / R2-7 (DA): the note must not instruct the caller to delete
+        // anything, must not blame the fill, and must say the receipt only
+        // identifies the draft by subject (#409) — the evidence is weaker than
+        // an instruction to do something irreversible.
+        XCTAssertFalse(note.contains("delete the other") || note.contains("delete_email"), note)
+        XCTAssertTrue(note.contains("#409"), note)
+        XCTAssertTrue(note.contains("KEPT"), note)
         XCTAssertTrue((result["new_draft"] as? String ?? "").contains("recipients_verified: false"))
+    }
+
+    func testUpdateDraft_phantomCreate_sameSubjectNamedCc_reportsNotConfirmed_notMismatch() async throws {
+        // R2-1 (logic N1 + DA): on a same-subject update the receipt's first
+        // read is `.found` (the OLD draft carries the subject), so it judges at
+        // the first instant after ⌘S. If the create was a phantom, the old
+        // draft's recipients differ from the request → a false mismatch. The
+        // gate must therefore sit AFTER the id receipt: a phantom must keep
+        // reporting "not confirmed" (2.5), never the mismatch note.
+        final class Log: @unchecked Sendable { var deleted = false; var n = 0 }
+        let l = Log()
+        let RS = "\u{1E}", GS = "\u{1D}"
+        // locate, pre-create snapshot, and EVERY post-create poll show the same
+        // rows — no new id ever appears (phantom create).
+        let rows = ["101\(RS)102\(GS)s\(RS)B"]
+        await MailController.shared.setTestSeams(
+            scriptRunner: { script in
+                if script.contains("#404 recipient receipt") { return "old-cc@example.com\(GS)" }   // the OLD draft's cc
+                if script.contains("whose id is") { l.deleted = true; return "Draft deleted" }
+                if script.contains("mailto:") { return "Draft created successfully (mailto path)" }
+                if script.contains("drafts mailbox") { l.n += 1; return rows[0] }
+                return ""
+            },
+            refusal: { nil })
+        let result = try await MailController.shared.updateDraft(
+            draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
+            to: ["a@x.co"], subject: "s", body: "b", cc: ["王小明 <ming@example.com>"], bcc: nil,
+            attachments: nil, format: .plain, fromAddress: nil)
+        XCTAssertEqual(result["deleted_old"] as? Bool, false)
+        XCTAssertFalse(l.deleted)
+        let note = result["note"] as? String ?? ""
+        XCTAssertTrue(note.contains("not confirmed"), "a phantom create must be reported as unconfirmed, not as a recipient mismatch: \(note)")
+        XCTAssertFalse(note.contains("differ from the request"), note)
     }
 
     func testUpdateDraft_receiptUnavailable_stillDeletesOld() async throws {

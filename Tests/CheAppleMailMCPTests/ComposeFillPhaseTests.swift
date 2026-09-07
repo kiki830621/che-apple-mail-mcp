@@ -91,8 +91,8 @@ final class ComposeFillPhaseTests: XCTestCase {
         XCTAssertTrue(s.contains("\"Mail.bccField\""))
         XCTAssertTrue(s.contains("密件副本") && s.contains("Bcc"), "menu item matched by locale fragments")
         XCTAssertTrue(s.contains("BCCREVEAL:"), "unrevealable Bcc must raise a pre-dispatch sentinel error")
-        XCTAssertTrue(s.contains("(looked for 密件副本 / Bcc)"),
-                      "the fragment list inside the error string must not carry literal quotes (osacompile -2741)")
+        XCTAssertTrue(s.contains("(looked for 密件副本 / Bcc under a menu named 顯示方式 or View"),
+                      "the fragment list inside the error string must not carry literal quotes (osacompile -2741) and must name the locale limit (R2-8)")
         XCTAssertTrue(s.contains("set _bccRevealed to true"), "the caller must learn the field was revealed")
         XCTAssertEqual(s.components(separatedBy: "click _revealItem").count - 1, 1,
                        "the View menu item is clicked at most once — never restored")

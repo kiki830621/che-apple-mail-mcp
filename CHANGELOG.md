@@ -39,9 +39,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the reason when the script itself could not run (a failed script is never
   reported as "not found" and is not retried — only a not-found result polls) —
   never a failure, the draft is always kept (#276 direction). `update_draft`
-  inherits it through `createDraft` and keeps the OLD draft (`deleted_old:
-  false` + note) on a definitive mismatch; an unavailable receipt does not gate
-  the delete. The read-back name check applies to named recipients only — a
+  inherits it through `createDraft` and, once its id receipt has confirmed the
+  replacement exists, keeps the OLD draft (`deleted_old: false` + a note that
+  reports what was observed and never instructs a deletion) on a definitive
+  mismatch; an unavailable or not-found receipt does not gate the delete, and a
+  phantom create keeps being reported as unconfirmed. Known limit: the receipt
+  identifies a draft by subject only ([#409](https://github.com/PsychQuant/che-apple-mail-mcp/issues/409)).
+  The Bcc reveal looks for its menu item only under a menu named 顯示方式 /
+  View — other Mail UI languages fail cleanly with `BCCREVEAL` and are not
+  supported yet. The read-back name check applies to named recipients only — a
   bare address's token is not name-compared because Mail renders a Contacts
   card's name there; the count stays strict. `DraftRecipientReceipt.swift`;
   `DraftRecipientReceiptTests`.

@@ -6,7 +6,7 @@
 ## 2. Fill phase：AX 聚焦取代 Tab 盲跳、貼上而非 set value
 
 - [x] 2.1 [P] `ComposeScriptBuilder` 的 fill 輸入改為 per-field 結構（`AddressField` 枚舉 `to / cc / bcc` → `Mail.toField` / `Mail.ccField` / `Mail.bccField`），每個欄位生成「依 AXIdentifier 取元素 → `set focused` → ⌘V → Tab」的 AppleScript 片段，不含任何 `set value`。驗證：script builder golden 測試 — 含 cc fill 時輸出含 `"Mail.ccField"` 與 `set focused`，且整份 script 不含 `set value of`；To-only 輸入仍通過既有 fill 測試（keystroke tab、引號轉義、先於 popup）；既有 To 路徑亦改為 AX 聚焦。
-- [x] 2.2 [P] AX token read-back 為 pre-dispatch gate：每個欄位 Tab 之後生成「讀 `UI elements` count 與各 child `AXValue`」的比對片段，期望值由 Swift 端依 `parseRecipient` 算出（有顯示名 → 顯示名；無 → 位址），不符 → `error` 帶 pre-dispatch sentinel。驗證：golden 測試 — 兩個 named cc 時 script 含期望 count `2` 與兩個顯示名字面值；`"Doe, Jane" <jane@…>` 的期望值為 `Doe, Jane`（引號已剝），對應 spec「Draft display-name recipients are filled through AX-addressed fields」。
+- [x] 2.2 [P] AX token read-back 為 pre-dispatch gate：每個欄位 Tab 之後生成「讀 `UI elements` count 與各 child `AXValue`」的比對片段，期望值由 Swift 端依 `parseRecipient` 算出（有顯示名 → 顯示名；裸位址 → 空字串＝不比對，因 Mail 會以通訊錄卡片名渲染；PR #407 R1 #6），count 嚴格，不符 → `error` 帶 pre-dispatch sentinel。驗證：golden 測試 — 兩個 named cc 時 script 含期望 count `2` 與兩個顯示名字面值；`"Doe, Jane" <jane@…>, d3@…` 的期望值為 `{"Doe, Jane", ""}` 且含 `is not "" and` 跳過條件，對應 spec「Draft display-name recipients are filled through AX-addressed fields」。
 - [x] 2.3 Bcc 欄位揭露不還原：`Mail.bccField` 不存在時生成「click 顯示方式選單中名稱含『密件副本』或『Bcc』的 item → 輪詢欄位出現（沿用 From-popup 輪詢上限）」片段，成功時設旗標供 result 帶 `bcc_field_revealed: true`，找不到 item 或逾時 → 具名 error；不生成第二次 click。驗證：golden 測試 — bcc fill 分支含選單 click 與輪詢、不含還原 click；Swift 端 result 組裝測試含 `bcc_field_revealed`，對應 spec「Bcc field is revealed on demand and disclosed, not restored」。
 
 ## 3. 存檔後 recipient receipt
@@ -16,7 +16,7 @@
 
 ## 4. cleanup 收掉 discard sheet（#333）
 
-- [x] 4.1 on-error cleanup 在 `close _cw saving no` 之後：若 `_cw` 仍存在且 `sheet 1` 的 AXIdentifier 為 `Mail.sendMessageAlert`，click title 為「不儲存」或以「Don」開頭的 button，再確認 `_cw` 不存在；仍存在 → 原錯誤訊息附加「compose 視窗殘留：<title>」。驗證：golden 測試 — cleanup 片段含 `Mail.sendMessageAlert` 與兩種按鈕 title 比對、不含「儲存」/「Save」按鈕的 click；error 訊息組裝測試覆蓋殘留註記，對應 spec「Compose-window cleanup dismisses the discard-draft sheet」。
+- [x] 4.1 on-error cleanup 在 `close _cw saving no` 之後：若 `_cw` 仍存在且 `sheet 1` 的 AXIdentifier 為 `Mail.sendMessageAlert`，且恰好一個視窗帶本 subject 時，click title 精確為「不儲存」/「Don't Save」/「Don’t Save」的 button，再確認 `_cw` 不存在；同標題不唯一 → 不點；仍存在 → 原錯誤訊息附加 `WINDOWLEFTOPEN`（區分「刻意拒絕」與「關不掉」；PR #407 R1 #11 / R2-10）。驗證：`ComposeCleanupSheetTests` — 精確標題、無 prefix match、每個 `click _b` 前一行是 discard 條件、`_titleMatches is 1` 閘門、兩種 WINDOWLEFTOPEN 原因，對應 spec「Compose-window cleanup dismisses the discard-draft sheet」。
 
 ## 5. Description、rules、CHANGELOG
 
@@ -29,3 +29,4 @@
 - [x] 6.1 `swift test` 全綠，`NoBodyInjectionGuardTests` 與 `NoContentContainsScanGuardTests` 綠（證明沒有復活舊路徑）。驗證：測試輸出 0 failures，並在 issue #404 貼上 summary 行。
 - [x] 6.2 Live gate（attended，2026-09-07 執行）：對真實帳號 `create_draft` 帶 named Cc + named Bcc（初始 Bcc 隱藏），Mail 草稿顯示人名 token，result 含 `recipients_verified: true` 與 `bcc_field_revealed: true`；再以 `update_draft` 重跑一次；最後刪除測試草稿。驗證：指令與觀測值貼進 #404 closing comment；未跑 → 貼 `blocked-on-setup` 保持 open 並在 description 加 caveat（`.claude/rules/deferred-live-verification.md`）。
   - 執行結果：`create_draft` 半段 **PASS**（release build，真實帳號，named To/Cc/Bcc；`bcc_field_revealed: true`、`recipients_verified: true`；獨立 AppleScript 讀回名稱與位址一致；測試草稿已刪）。`update_draft` 半段 **受 #406 阻塞**——定位步驟的 in-process 草稿掃描逾時 45 秒，v3.0.0 同樣重現，非本 change 回歸；unit 層（`DraftRecipientReceiptTests.testUpdateDraft_namedCc_returnsDeletedOldAndRecipientsVerified`）已綠。依 `deferred-live-verification.md` 走 (b)：#404 貼 `blocked-on-setup`、`update_draft` description 加 caveat。
+  - R2-6（PR #407 verify R2）：上述 live gate 跑在 R1／R2 修正前的腳本產生器上；修正改了四處腳本構造（欄位輪詢、裸位址 token 不比對、Bcc 揭露只查 顯示方式／View 選單、cleanup 同標題唯一性）。**最終 head 的重跑待 attended session**——2026-09-08 00:50 嘗試時螢幕已鎖定（`CGSSessionScreenIsLocked = true`），System Events 回 `-25211`、Mail 的 AX 視窗數為 0，GUI 自動化無法進行。腳本已備妥（session scratch `r2-live-gate.sh`：關閉殘留視窗 → 用拋棄式視窗把 Bcc 欄位藏回去 → `create_draft` named To/Cc/Bcc + `from_address` → 獨立 AppleScript 讀回 → 刪測試草稿），解鎖後執行並把觀測值補回本條。

@@ -385,7 +385,7 @@ func buildMailtoComposeScript(
 
                 if _fld is missing value then
                     set _revealItem to my findMenuItemNamed({\(frags)})
-                    if _revealItem is missing value then error "BCCREVEAL: no View menu item reveals the Bcc address field (looked for \(fragsPlain))"
+                    if _revealItem is missing value then error "BCCREVEAL: no View menu item reveals the Bcc address field (looked for \(fragsPlain) under a menu named 顯示方式 or View — Mail UI languages other than zh-TW and English are not supported yet; show the Bcc field yourself and retry)"
                     click _revealItem
                     repeat 12 times
                         set _fld to my findAddressField(_w, "\(idf)")
@@ -711,7 +711,9 @@ func buildMailtoComposeScript(
                     end try
                 end repeat
             end tell
-            if _stillOpen then set _mErr to (_mErr as text) & " — WINDOWLEFTOPEN: the compose window titled \\"\(subjEsc)\\" was left open (its discard sheet could not be dismissed); close it in Mail before retrying"
+            set _leftOpenReason to "its discard sheet could not be dismissed"
+            if _titleMatches is not 1 then set _leftOpenReason to "cleanup refused to dismiss its discard sheet because " & _titleMatches & " windows carry this subject and only one can be ours"
+            if _stillOpen then set _mErr to (_mErr as text) & " — WINDOWLEFTOPEN: the compose window titled \\"\(subjEsc)\\" was left open (" & _leftOpenReason & "); close it in Mail before retrying"
     """
     // send:true handler: three branches, all rethrow — sentinel-marked errors
     // (keystroke) pass through untouched; unmarked errors with the flag set

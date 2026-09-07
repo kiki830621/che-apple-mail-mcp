@@ -56,6 +56,16 @@ final class ComposeCleanupSheetTests: XCTestCase {
         XCTAssertTrue(s.contains("compose window titled \\\"S\\\" was left open"), s)
     }
 
+    func testCleanup_distinguishesRefusedFromUndismissable() {
+        // R2-10 (DA): when several windows carry the subject, cleanup
+        // deliberately refuses to click — the message must say so, not claim
+        // the sheet "could not be dismissed".
+        let s = draftScript()
+        XCTAssertTrue(s.contains("cleanup refused to dismiss its discard sheet because"), s)
+        XCTAssertTrue(s.contains("windows carry this subject"), s)
+        XCTAssertTrue(s.contains("its discard sheet could not be dismissed"), s)
+    }
+
     func testCleanup_sendPath_keepsPostDispatchBranchUntouched() {
         // #242: after ⇧⌘D the window is the user's only evidence — the
         // POSTDISPATCH branch must not gain a sheet-dismissal that closes it.

@@ -17,6 +17,7 @@ final class ComposeDescriptionDriftTests: XCTestCase {
         "hidden via Header Fields",
         "a cc/bcc recipient carries a display name",   // the pre-#404 reason-6 wording; the current one reads "a to/cc/bcc recipient … on a SEND"
         "Display-name CC recipients ALWAYS",
+        "double-gated",   // PR #407 R2-2: update_draft's delete has three gates since the recipient gate (#404)
     ]
 
     private func serverSource() throws -> [String] {

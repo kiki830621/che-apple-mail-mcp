@@ -2001,27 +2001,6 @@ actor MailController {
             attachments: attachments, accountName: nil, format: format,
             fromAddress: fromAddress)
 
-        // 2.4 RECIPIENT GATE (#404, PR #407 R1 #4): when the replacement's
-        //     post-save recipient receipt read the draft and its cc/bcc
-        //     addresses DIFFER from the request, the old draft is the only copy
-        //     whose recipients were right — keep it (both drafts exist, the
-        //     caller is told). Only a DEFINITIVE mismatch gates; a receipt that
-        //     could not run (`unavailable`, #406) or found no draft does not,
-        //     or every update on a slow-scan account would leave two drafts.
-        if let receipt = lastRecipientReceiptOutcome, receipt.isDefinitiveMismatch {
-            return [
-                "deleted_old": false,
-                "old_draft_id": old.id,
-                "new_draft": createResult,
-                "note": "the replacement draft was created but its saved cc/bcc recipients differ "
-                    + "from the request (recipients_verified: false) — the OLD draft (id \(old.id)) was "
-                    + "KEPT because it holds the previously verified recipients. The replacement was "
-                    + "reported created (not yet confirmed by the id receipt), so both drafts MAY exist: "
-                    + "check the recipients_diff, fix the wrong one in Mail, then delete the other "
-                    + "(delete_email) yourself.",
-            ]
-        }
-
         // 2.5 RECEIPT (verify R3, DA-2): the GUI mailto create path can
         //     report success after firing keystrokes without the draft
         //     actually landing (phantom success). Deleting on that word
@@ -2050,6 +2029,35 @@ actor MailController {
                     + "confirmed in the drafts mailbox (not confirmed after re-listing) — "
                     + "the old draft was KEPT. Check Mail's drafts, then delete the old "
                     + "draft manually or retry once the replacement is visible.",
+            ]
+        }
+
+        // 2.6 RECIPIENT GATE (#404, PR #407 R1 #4 → R2-1): only now, with the
+        //     replacement CONFIRMED to exist by the id receipt above. On a
+        //     same-subject update the recipient receipt's first read is always
+        //     `.found` (the old draft carries the subject), so it judges at the
+        //     first instant after ⌘S — before this gate moved here, a phantom
+        //     create read the OLD draft's recipients and fired a false mismatch
+        //     (PR #407 R2, logic N1 / DA Q1). Only a DEFINITIVE mismatch gates;
+        //     `unavailable` (#406) and not-found do not, or every update on a
+        //     slow-scan account would leave two drafts. Residual (#409): the
+        //     receipt identifies the draft by subject alone (newest id wins), so
+        //     it can still read the old draft — the note therefore states what
+        //     was observed and never instructs a deletion.
+        if let receipt = lastRecipientReceiptOutcome, receipt.isDefinitiveMismatch {
+            return [
+                "deleted_old": false,
+                "old_draft_id": old.id,
+                "new_draft": createResult,
+                "note": "the replacement draft was confirmed created, but the post-save recipient "
+                    + "receipt read cc/bcc addresses that differ from the request "
+                    + "(recipients_verified: false, see recipients_diff). The OLD draft (id \(old.id)) "
+                    + "was KEPT — it holds the previously verified recipients — so both drafts now "
+                    + "exist. Caveat: the receipt identifies a draft by subject only (newest id wins, "
+                    + "#409), so on a same-subject update it MAY have read the old draft rather than "
+                    + "the replacement, and a bare address may differ only by server-side "
+                    + "normalization. Open both drafts in Mail and decide yourself which to keep; "
+                    + "nothing was deleted.",
             ]
         }
 
