@@ -1,7 +1,7 @@
 {
   "name": "che-apple-mail-mcp",
-  "version": "2.47.0",
-  "binary_version": "3.0.0",
+  "version": "2.48.0",
+  "binary_version": "3.1.0",
   "description": "Apple Mail MCP server plugin — archive-mail SOP commands, compose and confirmation rules, and the wrapper that downloads the signed, notarized binary pinned by binary_version. Release narrative and version history live in CHANGELOG.md.",
   "author": {
     "name": "Che Cheng"

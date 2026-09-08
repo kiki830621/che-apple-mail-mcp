@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `plugin.json` description field. Section categorization is best-effort —
 > review and refine `Added` / `Changed` / `Fixed` etc. as needed.
 
+## [2.48.0] - 2026-09-08
+
+### Changed
+- `binary_version` 3.0.0 → 3.1.0: drafts (`create_draft` / `update_draft`) accept display-name recipients in to, cc AND bcc through AX-addressed fields; hidden Bcc revealed and disclosed (`bcc_field_revealed`); post-save three-state recipient receipt (`recipients_verified` / `recipients_diff` / `recipients_receipt: unavailable`); discard-sheet cleanup (#333 partial). `compose_email` still refuses display-name recipients. ([#404](https://github.com/PsychQuant/che-apple-mail-mcp/issues/404))
+- `rules/compose-wrapper-free.md`: reason 6 of the ineligibility enumeration is send-only; drafts support display names in all three lists.
+
 ## [2.47.0] - 2026-08-31
 
 ### Changed

@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "che-apple-mail-mcp",
-      "version": "2.47.0",
+      "version": "2.48.0",
       "description": "Apple Mail MCP server plugin — archive-mail SOP commands, compose/confirmation rules, and the signed-binary wrapper. Versions and the release narrative live in CHANGELOG.md; this entry deliberately carries no binary_version (#335), and its version is pinned equal to plugin.json by ManifestVersionTests.",
       "author": {
         "name": "Che Cheng"
