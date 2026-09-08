@@ -98,6 +98,55 @@ PLUGIN_VERSION=$(jq -r '.binary_version // .version // ""' "$PLUGIN_JSON" 2>/dev
 # Match → no-op.
 [ "$RUNTIME_VERSION" = "$PLUGIN_VERSION" ] && exit 0
 
+# Mismatch — but a wrapper running in a DELIBERATE degraded state records the
+# pin it could not honor (#392: pinned tag definitively missing upstream, or
+# its download failed verification). Killing would only respawn into the same
+# degraded state — an unbounded kill-at-every-session-start loop (#398 verify
+# round 1). Leave it running; the wrapper retries on its own TTL / pin change.
+#
+# The runtime field alone is NOT sufficient evidence (#398 verify round 2):
+# it is a snapshot from whenever the wrapper last ran, and the thing that
+# actually expires — the marker's 24h TTL — is only ever evaluated by the
+# wrapper, which cannot run again until something kills this process. Trusting
+# the field on its own made the degraded state PERMANENT: at TTL+1h the hook
+# still suppressed the kill, so the wrapper never re-ran, so the pin was never
+# retried. Deleting the marker by hand did not help either, because the
+# suppression did not consult it. So re-derive the decision from the marker
+# itself here, and suppress only while it is genuinely live.
+DEGRADED_PIN=$(jq -r '.degraded_pin // ""' "$RUNTIME_FILE" 2>/dev/null)
+if [ -n "$DEGRADED_PIN" ] && [ "$DEGRADED_PIN" = "$PLUGIN_VERSION" ]; then
+    MARKER_FILE="$INSTALL_DIR/.${BINARY_NAME}.fallback-tried"
+    MARKER_LIVE=false
+    if [ -f "$MARKER_FILE" ]; then
+        MARKER_PIN=$(awk 'NR==1{print $1}' "$MARKER_FILE" 2>/dev/null)
+        MARKER_EPOCH=$(awk 'NR==1{print $2}' "$MARKER_FILE" 2>/dev/null)
+        MARKER_REASON=$(awk 'NR==1{print $3}' "$MARKER_FILE" 2>/dev/null)
+        case "$MARKER_EPOCH" in
+            ''|*[!0-9]*) MARKER_EPOCH=0 ;;
+        esac
+        NOW_EPOCH=$(date +%s)
+        # 86400 == the wrapper's RETRY_TTL. Both sides read the same file;
+        # if you change one, change the other.
+        if [ "$MARKER_PIN" = "$PLUGIN_VERSION" ] \
+           && [ "$MARKER_EPOCH" -gt 0 ] \
+           && [ $((NOW_EPOCH - MARKER_EPOCH)) -lt 86400 ] \
+           && [ $((MARKER_EPOCH - NOW_EPOCH)) -lt 300 ]; then
+            MARKER_LIVE=true
+        fi
+    fi
+    if [ "$MARKER_LIVE" = true ]; then
+        case "$MARKER_REASON" in
+            verify) WHY="failed sha256 verification" ;;
+            *)      WHY="unavailable upstream" ;;
+        esac
+        echo "che-apple-mail-mcp: running v${RUNTIME_VERSION} in degraded mode — pinned v${PLUGIN_VERSION} ${WHY}; not killing (wrapper retries when the marker's 24h TTL lapses, or rm ${MARKER_FILE} to force)" >&2
+        exit 0
+    fi
+    # Marker gone or expired: the degraded state is over as far as the wrapper
+    # is concerned. Fall through to the normal stale-kill so the next spawn
+    # actually retries the pin.
+fi
+
 # Mismatch — check if recorded PID is still alive.
 PID=$(jq -r '.pid // empty' "$RUNTIME_FILE" 2>/dev/null)
 [ -z "$PID" ] && exit 0
