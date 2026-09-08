@@ -139,7 +139,7 @@ func buildMailtoComposeScript(
     attachments: [String],
     send: Bool,
     fromAddress: String? = nil,
-    fillToRecipients: [String] = []
+    fill: [RecipientFill] = []
 ) -> String {
     let windowDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_WINDOW_DELAY", fallback: 1.8)
     let stepDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_STEP_DELAY", fallback: 0.7)
@@ -188,6 +188,71 @@ func buildMailtoComposeScript(
     // errors. Flag initialized BEFORE the outer try so the handler can always
     // reference it.
     let flagInit = send ? "set _dispatched to false\n    " : ""
+    // #404: `_bccRevealed` is read by the return statement, so it is
+    // initialized before the outer try (same reason as `_dispatched`).
+    let fillsBcc = fill.contains { $0.field == .bcc }
+    let bccFlagInit = fillsBcc ? "set _bccRevealed to false\n    " : ""
+
+    // #404: handlers for the AX-addressed fill phase. `findAddressField` scans
+    // the compose window's text fields for a stable AXIdentifier (indexed +
+    // guarded, #295 — a for-in item-fetch throws -2700 on a settling AX tree);
+    // `findMenuItemNamed` scans ONLY the View menu — the menu-bar item named
+    // "顯示方式" (zh-TW Mail) or "View" (English Mail); other UI languages fail
+    // cleanly with BCCREVEAL naming that limit (PR #407 R1 #10 / R2-8) — for an
+    // item whose name contains one of the locale fragments: the menu is matched
+    // by name, the item by fragment.
+    let fillHandlers = fill.isEmpty ? "" : """
+    on findAddressField(_w, _idf)
+        tell application "System Events"
+            tell process "Mail"
+                set _tfTotal to 0
+                try
+                    set _tfTotal to (count of text fields of _w)
+                end try
+                repeat with _tfi from 1 to _tfTotal
+                    try
+                        set _tf to text field _tfi of _w
+                        if (value of attribute "AXIdentifier" of _tf) is _idf then return _tf
+                    end try
+                end repeat
+            end tell
+        end tell
+        return missing value
+    end findAddressField
+
+    on findMenuItemNamed(_frags)
+        tell application "System Events"
+            tell process "Mail"
+                repeat with _mbi in menu bar items of menu bar 1
+                    -- PR #407 R1 #10: only the View menu (顯示方式 / View). The
+                    -- Window menu lists window TITLES — our own subject — so a
+                    -- bar-wide fragment scan could click a window entry instead.
+                    set _mbName to ""
+                    try
+                        set _mbName to (name of _mbi as text)
+                    end try
+                    if _mbName is not "顯示方式" and _mbName is not "View" then
+                        -- skip
+                    else
+                    try
+                        repeat with _mi in menu items of menu 1 of _mbi
+                            set _nm to ""
+                            try
+                                set _nm to (name of _mi as text)
+                            end try
+                            repeat with _f in _frags
+                                if _nm contains (_f as text) then return _mi
+                            end repeat
+                        end repeat
+                    end try
+                    end if
+                end repeat
+            end tell
+        end tell
+        return missing value
+    end findMenuItemNamed
+
+    """
 
     // 1. Capture Mail window ids BEFORE the mailto, hand it off, then identify
     // OUR compose window as the NEW window (id unseen before) whose title is our
@@ -237,7 +302,7 @@ func buildMailtoComposeScript(
     end senderMatches
 
     """ : ""
-    var s = senderMatchHandler + """
+    var s = fillHandlers + senderMatchHandler + """
     tell application "Mail"
         set _wc to (count of windows)
         set _beforeIds to (id of every window)
@@ -262,7 +327,7 @@ func buildMailtoComposeScript(
         if _ourMatches is 0 then error "could not identify our new compose window by subject after mailto (safe fallback)"
         if _ourMatches > 1 then error "more than one new window is titled the subject — cannot safely identify our compose window (safe fallback)"
     end tell
-    \(flagInit)try
+    \(flagInit)\(bccFlagInit)try
         tell application "System Events"
             tell process "Mail"
                 set frontmost to true
@@ -271,36 +336,106 @@ func buildMailtoComposeScript(
         end tell
     """
 
-    // 1.5 (#277): display-name recipient fill via clipboard paste — TO ONLY.
-    // The mailto URL omits any display-name-carrying To list (a name can't ride
-    // RFC 6068; pasting `Name <addr>` lets Mail tokenize natively). A fresh
-    // compose window focuses the To field by default, so the fill pastes into
-    // it and tabs to tokenize. Paste, not keystroke: CJK names via keystroke
-    // hit IME nondeterminism (#220 lesson); the Swift caller wraps the run in
-    // withClipboardPreserved.
+    // 1.5 (#277 → #404): display-name recipient fill via clipboard paste,
+    // one address field at a time, each ADDRESSED BY ITS AXIdentifier.
+    // The mailto URL omits any display-name-carrying list (a name can't ride
+    // RFC 6068; pasting `Name <addr>` lets Mail tokenize natively). Paste, not
+    // keystroke: CJK names via keystroke hit IME nondeterminism (#220 lesson);
+    // the Swift caller wraps the run in withClipboardPreserved. Paste, not AX
+    // `set value`: the live probe (#404, 2026-09-07) showed `set value` with a
+    // comma list of NAMED recipients collapses into ONE token — the silent
+    // recipient loss this phase exists to prevent.
     //
-    // Cc is DELIBERATELY not filled here (#277 verify, Codex BLOCKING): Mail's
-    // Cc field can be hidden via Header Fields, so a Tab-to-Cc + paste would
-    // silently land in Subject/elsewhere and the draft would save with NO Cc
-    // (silent recipient loss). To is always visible + default-focused; Cc is
-    // not reliably targetable. So display-name Cc keeps the LEGACY path (which
-    // sets Cc names natively) — enforced by eligibility (displayNameFillViable
-    // requires a display-name-free cc). Any window-identity failure errors out
-    // pre-dispatch → cleanup closes OUR new window → legacy fallback.
+    // #277 verify (Codex BLOCKING) excluded Cc because a Tab-to-Cc + paste
+    // could land in Subject when the field is hidden. #404 answers that by
+    // focusing the field through its AXIdentifier (Mail.toField / Mail.ccField
+    // / Mail.bccField): a hidden or renamed field is NOT FOUND → FILLFIELD
+    // error → pre-dispatch cleanup → named refusal. Bcc, hidden by default, is
+    // revealed on demand through the View menu (BCCREVEAL on failure) and is
+    // deliberately NOT hidden again — the caller learns it via the
+    // `[bcc-field-revealed]` tag on the return value.
+    //
+    // After each paste + Tab the field's tokens are read back (FILLREADBACK):
+    // count must equal the recipient count and each token's AXValue must equal
+    // the recipient's display name (its address when bare). The token exposes
+    // no address over AX, so the addresses themselves are verified after the
+    // save by the Swift-side recipient receipt.
     // Draft-only by design (#277): send:true never reaches this phase — a
     // failed fill on a send would fire with missing recipients.
-    if !fillToRecipients.isEmpty {
-        let toLine = fillToRecipients.joined(separator: ", ")
+    for entry in fill {
+        let idf = entry.field.axIdentifier
+        let line = entry.recipients.joined(separator: ", ")
+        // PR #407 R1 #6: a bare address's token is NOT an invariant — Mail
+        // renders an address that has a Contacts card as the card's NAME. So a
+        // bare recipient contributes an empty expectation (= any token text);
+        // only a recipient that carries a display name expects that name. The
+        // COUNT stays strict — that is what catches `set value`-style merging.
+        let expectedNames = entry.recipients.map { r -> String in
+            let parsed = parseRecipient(r)
+            return "\"" + appleScriptEscape(parsed.name ?? "") + "\""
+        }.joined(separator: ", ")
+        let expectedCount = entry.recipients.count
+        let reveal: String
+        if entry.field == .bcc {
+            let frags = entry.field.revealMenuNameFragments
+                .map { "\"" + appleScriptEscape($0) + "\"" }.joined(separator: ", ")
+            // The human-readable list goes INSIDE a string literal, so it must
+            // not carry the literal quotes of the AppleScript list above
+            // (osacompile: "Expected end of line but found unknown token").
+            let fragsPlain = appleScriptEscape(entry.field.revealMenuNameFragments.joined(separator: " / "))
+            reveal = """
+
+                if _fld is missing value then
+                    set _revealItem to my findMenuItemNamed({\(frags)})
+                    if _revealItem is missing value then error "BCCREVEAL: no View menu item reveals the Bcc address field (looked for \(fragsPlain) under a menu named 顯示方式 or View — Mail UI languages other than zh-TW and English are not supported yet; show the Bcc field yourself and retry)"
+                    click _revealItem
+                    repeat 12 times
+                        set _fld to my findAddressField(_w, "\(idf)")
+                        if _fld is not missing value then exit repeat
+                        delay 0.3
+                    end repeat
+                    if _fld is missing value then error "BCCREVEAL: the Bcc address field (\(idf)) did not appear after revealing it"
+                    set _bccRevealed to true
+                end if
+        """
+        } else {
+            reveal = ""
+        }
         s += """
 
-        set the clipboard to "\(appleScriptEscape(toLine))"
+        set the clipboard to "\(appleScriptEscape(line))"
         tell application "System Events"
             tell process "Mail"
                 set frontmost to true
                 \(raiseOnly)
+                -- PR #407 R1 #13: the AX tree settles for a beat after the
+                -- window opens (#295/#296) — poll the field, never judge one probe.
+                set _fld to missing value
+                repeat 12 times
+                    set _fld to my findAddressField(_w, "\(idf)")
+                    if _fld is not missing value then exit repeat
+                    delay 0.3
+                end repeat\(reveal)
+                if _fld is missing value then error "FILLFIELD: address field \(idf) not found on the compose window — cannot fill \(entry.field.rawValue) display-name recipients"
+                set focused of _fld to true
+                delay 0.25
                 keystroke "v" using command down
                 delay \(stepDelay)
                 keystroke tab
+                delay \(stepDelay)
+                set _expected to {\(expectedNames)}
+                set _tokTotal to 0
+                try
+                    set _tokTotal to (count of UI elements of _fld)
+                end try
+                if _tokTotal is not \(expectedCount) then error "FILLREADBACK: \(idf) holds " & _tokTotal & " recipient tokens, expected \(expectedCount)"
+                repeat with _ti from 1 to _tokTotal
+                    set _tokVal to ""
+                    try
+                        set _tokVal to (value of UI element _ti of _fld as text)
+                    end try
+                    if (item _ti of _expected) is not "" and _tokVal is not (item _ti of _expected) then error "FILLREADBACK: \(idf) token " & _ti & " reads \\"" & _tokVal & "\\", expected \\"" & (item _ti of _expected) & "\\""
+                end repeat
             end tell
         end tell
         delay \(stepDelay)
@@ -515,6 +650,15 @@ func buildMailtoComposeScript(
     // unconditional cleanup (AppleScript-equivalent to the pre-#242 script;
     // the cleanupBody extraction shifts leading whitespace, which AppleScript
     // ignores — verify #242, regression lens).
+    // #333/#404: a mailto compose window does NOT close on `saving no` — Mail
+    // answers with the "save this message as a draft?" sheet (AXIdentifier
+    // Mail.sendMessageAlert; live probe 2026-09-07) and the window stays
+    // behind it, which is how a pre-dispatch abort used to leave an orphan
+    // window that made the next attempt fail on "same-title window exists"
+    // (#333). Cleanup therefore dismisses the sheet through its DISCARD
+    // button (title 不儲存 / Don't Save — never the save or cancel buttons),
+    // re-checks that our window is gone, and otherwise appends a
+    // WINDOWLEFTOPEN note to the error so the caller knows to close it.
     let cleanupBody = """
             tell application "Mail"
                 repeat with _cw in windows
@@ -523,6 +667,56 @@ func buildMailtoComposeScript(
                     end try
                 end repeat
             end tell
+            delay 0.4
+            tell application "System Events"
+                tell process "Mail"
+                    -- PR #407 R1 #11: System Events cannot see Mail's window
+                    -- ids, so the sheet is found through the window TITLE. If
+                    -- more than one window carries our subject the click could
+                    -- discard someone else's unsaved message — refuse, and let
+                    -- the WINDOWLEFTOPEN note below report it.
+                    set _titleMatches to 0
+                    repeat with _cw2 in windows
+                        try
+                            if (title of _cw2) is "\(subjEsc)" then set _titleMatches to _titleMatches + 1
+                        end try
+                    end repeat
+                    if _titleMatches is 1 then
+                    repeat with _cw2 in windows
+                        try
+                            if (title of _cw2) is "\(subjEsc)" and (count of sheets of _cw2) > 0 then
+                                set _sh to sheet 1 of _cw2
+                                if (value of attribute "AXIdentifier" of _sh) is "Mail.sendMessageAlert" then
+                                    repeat with _b in buttons of _sh
+                                        set _bt to ""
+                                        try
+                                            set _bt to (title of _b as text)
+                                        end try
+                                        if _bt is "不儲存" or _bt is "Don't Save" or _bt is "Don’t Save" then
+                                            click _b
+                                            exit repeat
+                                        end if
+                                    end repeat
+                                end if
+                            end if
+                        end try
+                    end repeat
+                    end if
+                end tell
+            end tell
+            delay 0.4
+            set _stillOpen to false
+            tell application "Mail"
+                repeat with _cw in windows
+                    try
+                        if (id of _cw) is _ourId then set _stillOpen to true
+                    end try
+                end repeat
+            end tell
+            set _leftOpenReason to "its discard sheet could not be dismissed"
+            if _titleMatches is greater than 1 then set _leftOpenReason to "cleanup refused to dismiss its discard sheet because " & _titleMatches & " windows carry this subject and only one can be ours"
+            if _titleMatches is 0 then set _leftOpenReason to "no window carrying this subject was visible to System Events, so nothing was clicked"
+            if _stillOpen then set _mErr to (_mErr as text) & " — WINDOWLEFTOPEN: the compose window titled \\"\(subjEsc)\\" was left open (" & _leftOpenReason & "); close it in Mail before retrying"
     """
     // send:true handler: three branches, all rethrow — sentinel-marked errors
     // (keystroke) pass through untouched; unmarked errors with the flag set
@@ -555,7 +749,7 @@ func buildMailtoComposeScript(
     on error _mErr
     \(handlerBlock)
     end try\(postTryTail)
-    return "\(dispatchLabel)"
+    \(fillsBcc ? "set _bccTag to \"\"\n    if _bccRevealed then set _bccTag to \" [bcc-field-revealed]\"\n    return \"\(dispatchLabel)\" & _bccTag" : "return \"\(dispatchLabel)\"")
     """
     return s
 }

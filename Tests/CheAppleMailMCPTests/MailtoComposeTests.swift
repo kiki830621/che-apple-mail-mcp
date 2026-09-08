@@ -358,8 +358,10 @@ extension MailtoComposeTests {
         // two-argument tail (attachments #220 + recipients #251). A bare
         // "attachments: attachments," needle would also match the many
         // composeViaMailto/legacy call sites.
-        let sendTail = "attachments: attachments,\n                recipients: to + (cc ?? []) + (bcc ?? []))"
-        let draftTail = "attachments: attachments,\n                recipients: to + (cc ?? []) + (bcc ?? []),\n                draftMode: true, cc: cc ?? [], bcc: bcc ?? [])"
+        // #404 (PR #407 R1 #9): the three lists are threaded AS three lists —
+        // `to:` / `cc:` / `bcc:` — not concatenated into one `recipients:`.
+        let sendTail = "attachments: attachments,\n                to: to, cc: cc ?? [], bcc: bcc ?? [])"
+        let draftTail = "attachments: attachments,\n                to: to,\n                draftMode: true, cc: cc ?? [], bcc: bcc ?? [])"
         // #304: two probe sites, not four — the `require_wrapper_free` strict
         // branches that duplicated each probe are gone, because refusing IS the
         // behavior now. Both dimensions must still be threaded at both sites.
@@ -485,14 +487,14 @@ extension MailtoComposeTests {
     }
 
     func testMailtoScript_fillTo_orderingAndEscaping() {
-        // #277 (+ verify, Codex): fill is TO-ONLY (Cc removed — a hidden Cc
-        // field would silently drop names). The To fill runs BEFORE the popup
-        // phase (fresh window's default To focus) and before dispatch. Quotes
-        // in display names are AppleScript-escaped.
+        // #277 (+ verify, Codex) → #404: the fill runs BEFORE the popup phase
+        // and before dispatch; since #404 every field (to/cc/bcc) is addressed
+        // by AXIdentifier rather than relying on the fresh window's default To
+        // focus. Quotes in display names are AppleScript-escaped.
         let script = buildMailtoComposeScript(
             url: "mailto:?subject=S", subject: "S", attachments: [],
             send: false, fromAddress: "me@corp.example",
-            fillToRecipients: ["\"Wang, X\" <w@x.example>"])
+            fill: [RecipientFill(field: .to, recipients: ["\"Wang, X\" <w@x.example>"])])
         XCTAssertTrue(script.contains("keystroke tab"))
         XCTAssertTrue(script.contains("\\\"Wang, X\\\" <w@x.example>"),
                       "display-name quotes must be AppleScript-escaped in the clipboard literal")
