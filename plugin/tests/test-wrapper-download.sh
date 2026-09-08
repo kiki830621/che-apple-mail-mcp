@@ -539,6 +539,199 @@ assert "no leaked meta/sha temps" "! ls $TEST_HOME/bin/.CheAppleMailMCP.meta.* $
 assert "installed mode is 755" "[ \"\$(stat -f '%Lp' $TEST_HOME/bin/CheAppleMailMCP)\" = 755 ]"
 
 # ============================================================
+echo "Case 20 (#398 R3): dot-segment in the asset URL is refused"
+# ============================================================
+# Round 2 "pinned" the host with a string-prefix compare. Round 3 proved that
+# is not a pin: curl NORMALISES the path before requesting, so a URL that
+# starts with the right prefix can resolve anywhere on github.com. Verified
+# with curl -w '%{url_effective}':
+#   .../che-apple-mail-mcp/releases/download/../../../../attacker-org/evil-repo/releases/download/v1/CheAppleMailMCP
+#   -> https://github.com/attacker-org/evil-repo/releases/download/v1/CheAppleMailMCP
+# And because the .sha256 is selected by the SAME rule it comes from the same
+# attacker path, so verification passes and the wrapper prints "sha256 verified"
+# while exec'ing someone else's binary.
+reset_state
+write_plugin_json "2.99.0"
+# Two payloads, because they are stopped by DIFFERENT checks and the first
+# version of this case only exercised one of them (mutation-testing caught it:
+# deleting is_dot_segment left the suite fully green).
+#
+#   (a) many components  -> stopped by the "exactly two path components" regex
+#   (b) exactly two, one of which is `..` -> regex ACCEPTS it; only
+#       is_dot_segment stops it. Verified with curl -w '%{url_effective}':
+#       .../releases/download/../CheAppleMailMCP
+#         -> https://github.com/PsychQuant/che-apple-mail-mcp/releases/CheAppleMailMCP
+{
+    printf '{"assets": [\n'
+    printf '  {"name": "CheAppleMailMCP", "browser_download_url": "%s/../../../../attacker-org/evil-repo/releases/download/v1/CheAppleMailMCP"}\n' "$DL_PREFIX"
+    printf ']}\n'
+} > "$SCEN/api_pinned.body"
+write_mock_binary_content "DOTSEG-PWNED"
+run_wrapper
+assert "dot-segment (many components): nothing installed" "! grep -q DOTSEG-PWNED $TEST_DIR/out.txt"
+assert "dot-segment (many components): refused" "grep -q 'no download URL found' $TEST_DIR/err.txt"
+
+reset_state
+write_plugin_json "2.99.0"
+{
+    printf '{"assets": [\n'
+    printf '  {"name": "CheAppleMailMCP", "browser_download_url": "%s/../CheAppleMailMCP"}\n' "$DL_PREFIX"
+    printf ']}\n'
+} > "$SCEN/api_pinned.body"
+write_mock_binary_content "DOTSEG2-PWNED"
+run_wrapper
+assert "dot-segment (regex-shaped): nothing installed" "! grep -q DOTSEG2-PWNED $TEST_DIR/out.txt"
+assert "dot-segment (regex-shaped): refused" "grep -q 'no download URL found' $TEST_DIR/err.txt"
+
+# ============================================================
+echo "Case 21 (#398 R3): a #fragment cannot satisfy the basename check"
+# ============================================================
+# curl drops the fragment before the request, so `${u##*/}` sees
+# CheAppleMailMCP while the server is asked for `other-asset`.
+reset_state
+write_plugin_json "2.99.0"
+{
+    printf '{"assets": [\n'
+    printf '  {"name": "CheAppleMailMCP", "browser_download_url": "%s/v2.99.0/other-asset#/CheAppleMailMCP"}\n' "$DL_PREFIX"
+    printf ']}\n'
+} > "$SCEN/api_pinned.body"
+write_mock_binary_content "FRAG-PWNED"
+run_wrapper
+assert "fragment: nothing installed" "! grep -q FRAG-PWNED $TEST_DIR/out.txt"
+assert "fragment: refused" "grep -q 'no download URL found' $TEST_DIR/err.txt"
+
+# ============================================================
+echo "Case 22 (#398 R3): an error PAGE on the no-digest path is refused"
+# ============================================================
+# This is an explicit acceptance item of #392's own diagnosis ("--fail 擋錯誤頁")
+# that had NO test: Case 5 exercises the HTTP-status gate (404), never the
+# body-shape gate. Removing looks_like_html entirely left the suite fully green.
+reset_state
+write_plugin_json "2.99.0"
+write_api api_pinned "2.99.0" no          # no .sha256 -> the unverified path
+printf '<!DOCTYPE html>\n<html><body>504 Gateway Timeout</body></html>\n' > "$SCEN/binary.body"
+run_wrapper
+assert "html body: refused, not chmod+exec'd" "grep -q 'HTML page, not a binary' $TEST_DIR/err.txt"
+assert "html body: nothing claimed as installed" "! grep -q 'installed v' $TEST_DIR/err.txt"
+
+# ============================================================
+echo "Case 23 (#398 R3): a stale marker for a DIFFERENT pin is cleared"
+# ============================================================
+# Every other case writes marker pin == plugin pin (2.99.0), so the
+# clearing branch was never entered; deleting it left the suite green.
+# The installed version ALREADY equals the pin, so no download happens and the
+# post-install `rm -f` never runs. Only the pre-clearing branch can remove the
+# marker here. The first version of this case had installed != pin, so the
+# success path cleared the marker either way and deleting the branch under test
+# left the suite green (caught by mutation-testing).
+reset_state
+seed_installed "MOCK-RUN-299" "2.99.0"
+write_plugin_json "2.99.0"
+printf '2.50.0 %s miss\n' "$(date +%s)" > "$MARKER"   # marker for a pin we no longer want
+run_wrapper
+assert "no download needed (already at the pin)" "grep -q MOCK-RUN-299 $TEST_DIR/out.txt"
+assert "stale marker for another pin was cleared" "[ ! -f $MARKER ]"
+
+# ============================================================
+echo "Case 24 (#398 R3): a FUTURE-dated marker epoch cannot suppress forever"
+# ============================================================
+# Clock skew or a hand-edit could park the epoch years ahead; without the
+# guard the TTL comparison never lapses.
+reset_state
+seed_installed "OLD-RUN-298" "2.98.0"
+write_plugin_json "2.99.0"
+printf '2.99.0 %s miss\n' "$(( $(date +%s) + 315360000 ))" > "$MARKER"   # +10 years
+write_api api_pinned "2.99.0" yes
+write_mock_binary_content "MOCK-RUN-299"
+write_matching_sha
+run_wrapper
+assert "future epoch ignored: the pin was retried" "grep -q MOCK-RUN-299 $TEST_DIR/out.txt"
+assert "future epoch: converged to the pin" "[ \"\$(cat $SIDECAR)\" = 2.99.0 ]"
+
+# ============================================================
+echo "Case 25 (#398 R3): SemVer build metadata survives into runtime state"
+# ============================================================
+# Round 1 used `tr -cd` on the version token, which silently DROPPED `+build`;
+# the hook then compared the mangled value against the raw plugin.json value,
+# so they could never match again. No test used such a version.
+reset_state
+write_plugin_json "2.99.0+build.7"
+write_api api_pinned "2.99.0+build.7" yes
+write_mock_binary_content "MOCK-BUILDMETA"
+write_matching_sha
+run_wrapper
+assert "build metadata: installed" "grep -q MOCK-BUILDMETA $TEST_DIR/out.txt"
+assert "build metadata preserved in runtime state (not stripped)" "grep -q '\"version_at_spawn\":\"2.99.0+build.7\"' $RUNTIME"
+
+# ============================================================
+echo "Case 26 (#398 R3): a present-but-BROKEN shasum falls through to openssl"
+# ============================================================
+# Case 17 removes both tools. The fix was written for the other scenario --
+# shasum exists but fails (Apple is sunsetting its perl runtime) -- and round 1
+# dispatched on `command -v shasum` alone, so openssl was structurally
+# unreachable and the caller reported "no sha256 tool available".
+reset_state
+BROKEN="$TEST_DIR/broken-shasum"
+mkdir -p "$BROKEN"
+printf '#!/bin/sh
+exit 1
+' > "$BROKEN/shasum"      # present, always fails
+chmod +x "$BROKEN/shasum"
+if ! command -v openssl >/dev/null 2>&1; then
+    echo "  SKIP  Case 26: openssl not available to fall through to" >&2
+else
+    write_plugin_json "2.99.0"
+    write_api api_pinned "2.99.0" yes
+    write_mock_binary_content "MOCK-OPENSSL"
+    openssl dgst -sha256 -r "$SCEN/binary.body" | awk '{print $1}' > "$SCEN/sha.body"
+    : > "$TEST_DIR/out.txt"; : > "$TEST_DIR/err.txt"
+    HOME="$TEST_HOME" PATH="$BROKEN:$RUN_PATH" WRAPPER_TEST_SCEN="$SCEN" \
+        WRAPPER_TEST_TIMEOUT_LOG="$TEST_DIR/curl-timeouts.log" \
+        "$FAKE_PLUGIN/bin/che-apple-mail-mcp-wrapper.sh" \
+        > "$TEST_DIR/out.txt" 2> "$TEST_DIR/err.txt" || true
+    assert "broken shasum: openssl fallback reached, install verified" "grep -q 'sha256 verified' $TEST_DIR/err.txt"
+    assert "broken shasum: did NOT report 'no sha256 tool'" "! grep -q 'no sha256 tool' $TEST_DIR/err.txt"
+fi
+
+# ============================================================
+echo "Case 27 (#398 R3): the hook names a VERIFY marker as possible tampering"
+# ============================================================
+# Cases 12/13/14 all write `miss` markers, so the hook's verify branch --
+# the one that distinguishes a digest mismatch from an upstream outage --
+# was never executed.
+reset_state
+mkdir -p "$TEST_HOME/bin"
+( exec -a CheAppleMailMCP-mock sleep 1000 ) >/dev/null 2>&1 &
+MOCK_PID=$!
+echo "$MOCK_PID" >> "$TEST_DIR/mock_pids"
+sleep 0.2
+write_plugin_json "2.99.0"
+printf '{"pid":%d,"started_at":1,"version_at_spawn":"3.0.0","degraded_pin":"2.99.0"}\n' "$MOCK_PID" > "$RUNTIME"
+printf '2.99.0 %s verify\n' "$(date +%s)" > "$MARKER"
+: > "$TEST_DIR/err.txt"
+HOME="$TEST_HOME" "$FAKE_PLUGIN/hooks/session-start.sh" 2> "$TEST_DIR/err.txt"
+assert "verify marker: hook names it as a verification failure" "grep -q 'failed sha256 verification' $TEST_DIR/err.txt"
+assert "verify marker: does NOT call it an upstream outage" "! grep -q 'unavailable upstream' $TEST_DIR/err.txt"
+kill -KILL "$MOCK_PID" 2>/dev/null || true
+
+# ============================================================
+echo "Case 28 (#398 R3): no bash-4-only syntax in shipped scripts"
+# ============================================================
+# The shebang is /bin/bash, which on macOS is 3.2. `${x,,}`, declare -A,
+# mapfile and friends PARSE fine there (so `bash -n` is clean) and fail at
+# expansion time. Round 3 shipped exactly that and the suite went 0/76 with a
+# failure that looked like a logic bug. Grep the class, ignoring comments.
+BASH4_HITS=0
+for f in "$FAKE_PLUGIN/bin/che-apple-mail-mcp-wrapper.sh" "$FAKE_PLUGIN/hooks/session-start.sh"; do
+    stripped=$(sed 's/[[:space:]]*#.*$//' "$f")
+    if printf '%s' "$stripped" | grep -qE '\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?[,^]{1,2}\}|declare[[:space:]]+-A|local[[:space:]]+-A|\b(mapfile|readarray)\b'; then
+        BASH4_HITS=$((BASH4_HITS + 1))
+        echo "    bash-4 construct in $f" >&2
+    fi
+done
+assert "shipped scripts are bash-3.2 clean" "[ $BASH4_HITS -eq 0 ]"
+
+# ============================================================
 echo ""
 echo "============================================="
 echo "Results: $PASS pass, $FAIL fail"

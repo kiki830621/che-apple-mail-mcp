@@ -116,17 +116,53 @@ http_get() {
 # Every browser_download_url is put on its own line FIRST, so correctness no
 # longer depends on the API pretty-printing one asset per line — against a
 # minified response the old greedy sed returned the LAST url on the line, i.e.
-# the wrong asset (#398 round 2). Selection is an exact basename comparison,
-# not a regex, so the `.` in `.sha256` cannot act as a wildcard. The host and
-# path are pinned to this repo's own release downloads, so a spoofed or
-# tampered API body cannot redirect the install to an arbitrary host.
+# the wrong asset (#398 round 2).
+#
+# The URL is then validated STRUCTURALLY, not by string prefix. Round 2 used
+# `[[ "$u" == "$prefix"* ]]` plus a basename compare, and round 3 proved that
+# is not a pin at all — it validates a string while curl fetches a DIFFERENT
+# resource, because curl normalises the path before requesting it:
+#
+#   .../che-apple-mail-mcp/releases/download/../../../../attacker-org/evil-repo/releases/download/v1/CheAppleMailMCP
+#     string starts with the prefix  ✓   basename is CheAppleMailMCP  ✓
+#     curl actually GETs → https://github.com/attacker-org/evil-repo/releases/download/v1/CheAppleMailMCP
+#
+# and because the .sha256 is chosen by the same rule it comes from the same
+# attacker path, so verification PASSES and the wrapper reports
+# "(sha256 verified)" while exec'ing someone else's binary. A `#fragment` is
+# likewise dropped before the request, so the basename check can be satisfied
+# by text the server never sees.
+#
+# Hence: exactly two path components after /download/, no query, no fragment,
+# and no component that is a dot-segment in any spelling.
 asset_url() {
-    local prefix="https://github.com/$REPO/releases/download/"
-    grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*"' "$2" 2>/dev/null \
+    local want="$1" body="$2"
+    local re="^https://github\.com/${REPO}/releases/download/([^/?#]+)/([^/?#]+)\$"
+    grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*"' "$body" 2>/dev/null \
         | cut -d'"' -f4 \
         | while IFS= read -r u; do
-            [[ "$u" == "$prefix"* ]] || continue
-            [[ "${u##*/}" == "$1" ]] && printf '%s\n' "$u"
+            [[ "$u" =~ $re ]] || continue
+            local tag="${BASH_REMATCH[1]}" name="${BASH_REMATCH[2]}"
+            # `..` survives [^/?#]+ but is exactly what curl collapses away.
+            # Percent-encoded spellings are rejected too: curl leaves them
+            # literal, but then the path is still not the one this check
+            # claims to have validated — and an origin that DOES decode them
+            # would resolve elsewhere.
+            # Case-insensitive by enumeration, NOT by ${x,,} — the shebang
+            # here is /bin/bash, which on macOS is 3.2, where that expansion
+            # is a runtime "bad substitution". `bash -n` parses it happily,
+            # so this class of mistake is invisible until the suite runs
+            # (#398 round 3: it went 0/76 and looked like a logic bug).
+            is_dot_segment() {
+                case "$1" in
+                    .|..) return 0 ;;
+                    %2[eE]|%2[eE]%2[eE]|.%2[eE]|%2[eE].) return 0 ;;
+                    *) return 1 ;;
+                esac
+            }
+            is_dot_segment "$tag" && continue
+            is_dot_segment "$name" && continue
+            [[ "$name" == "$want" ]] && printf '%s\n' "$u"
           done \
         | head -1
 }

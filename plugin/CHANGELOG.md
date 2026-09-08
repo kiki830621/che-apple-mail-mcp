@@ -56,15 +56,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mismatch is reported as a possible tampering signal instead of "unavailable
   upstream".
 
-  Test suite: **76 asserts across 19 mock-curl scenarios** — including a
-  minified API body, a foreign-host asset URL, a digest published on a machine
-  with no hash tool, an injection payload in the marker, temp-leak and
-  file-mode checks, and hook integration with its negative control. Every fix
-  above was **mutation-tested**: nine deliberate regressions were re-introduced
-  one at a time and all nine turned the suite red. That exercise is also how
-  the corrupt-marker case was caught testing nothing — its payload contained
-  whitespace, so `read` split it into three fields and it never reached the
-  arithmetic it claimed to exercise.
+  **The asset-URL host pin was not a pin.** Round 2 validated the URL as a
+  string (`starts with https://github.com/<repo>/releases/download/`) and then
+  handed it to curl, which normalises the path *before* requesting it. Verified
+  with `curl -w '%{url_effective}'`: a URL beginning with the correct prefix but
+  carrying `../../../..` resolves to `github.com/attacker-org/evil-repo/...`,
+  and because the `.sha256` is chosen by the same rule it comes from the same
+  attacker path — so verification PASSES and the wrapper prints
+  `(sha256 verified)` while exec'ing someone else's binary. A `#fragment` is
+  likewise dropped before the request, so the basename check can be satisfied
+  by text the server never sees. The URL is now validated structurally: exactly
+  two path components after `/download/`, no query, no fragment, and no
+  dot-segment in any spelling.
+
+  Test suite: **95 asserts across 28 mock-curl scenarios**. Round 3 audited the
+  round-2 claim that "every fix was mutation-tested" and found it **false**:
+  five fixes shipped with no regression coverage at all (the stale-marker
+  clearing, the HTML-error-page refusal — an explicit acceptance item of #392's
+  own diagnosis — the `openssl` fallback for a present-but-broken `shasum`,
+  SemVer build metadata surviving `json_escape`, and the future-dated-epoch
+  guard), plus the hook's `verify` branch, which every existing case avoided by
+  writing `miss` markers. All now have cases.
+
+  Nine mutations run, nine caught — **after** two of the new cases were
+  themselves caught testing nothing: the dot-segment payload was stopped by the
+  component-count regex before it ever reached the dot-segment check, and the
+  stale-marker case had the download succeed, so the post-install cleanup
+  cleared the marker whether or not the branch under test existed. Both were
+  rewritten to exercise the code they name. A ninth case now greps for
+  bash-4-only syntax: the shebang is `/bin/bash`, which is 3.2 on macOS, where
+  `${x,,}` parses cleanly under `bash -n` and fails at expansion time — this
+  round shipped exactly that and the suite went to 0/76 with a failure that
+  read like a logic bug.
 
 ### Changed
 
