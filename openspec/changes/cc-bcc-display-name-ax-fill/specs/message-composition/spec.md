@@ -36,7 +36,7 @@ The field lookup SHALL be polled (the AX tree settles for a beat after the windo
 
 ### Requirement: Bcc field is revealed on demand and disclosed, not restored
 
-When a display-name `bcc` list is to be filled and the compose window exposes no element with identifier `Mail.bccField`, the system SHALL click the item of the View menu whose name contains `密件副本` or `Bcc`, then poll until `Mail.bccField` exists, bounded by the same deadline used for From-popup population. The system SHALL NOT attempt to hide the field again afterwards. When the field was revealed by this call, the success result SHALL include `bcc_field_revealed: true`. If the menu item cannot be found or the field does not appear before the deadline, the call SHALL fail naming the Bcc field as unrevealable, close only the compose window this call opened, and create no draft.
+When a display-name `bcc` list is to be filled and the compose window exposes no element with identifier `Mail.bccField`, the system SHALL click the item of the View menu whose name contains `密件副本` or `Bcc` — the View menu itself SHALL be identified only by the menu-bar name `顯示方式` or `View`, and on a Mail UI in another language the reveal SHALL fail cleanly with `BCCREVEAL` naming that limit rather than scan other menus (the Window menu lists window titles, including this window's subject) — then poll until `Mail.bccField` exists, bounded by the same deadline used for From-popup population. The system SHALL NOT attempt to hide the field again afterwards. When the field was revealed by this call, the success result SHALL include `bcc_field_revealed: true`. If the menu item cannot be found or the field does not appear before the deadline, the call SHALL fail naming the Bcc field as unrevealable, close only the compose window this call opened, and create no draft.
 
 #### Scenario: Hidden Bcc field is revealed and left visible
 
@@ -48,13 +48,13 @@ When a display-name `bcc` list is to be filled and the compose window exposes no
 
 #### Scenario: Bcc field cannot be revealed
 
-- **WHEN** the View menu contains no item whose name contains `密件副本` or `Bcc`
+- **WHEN** the View menu contains no item whose name contains `密件副本` or `Bcc` (or the View menu cannot be identified by name)
 - **THEN** the call SHALL fail naming the Bcc field as unrevealable
 - **AND** no draft SHALL be created
 
 ### Requirement: Draft recipient receipt verifies addresses after save
 
-When a draft was created with any display-name `cc` or `bcc` recipient, then after the save keystroke the system SHALL locate the new draft in the drafts mailbox by exact subject match (reusing the post-create receipt used by `update_draft`), read the address of every cc recipient and every bcc recipient, and compare each set with the addresses the caller supplied. When both sets match, the result SHALL include `recipients_verified: true`. When either set differs, or the draft cannot be located, the result SHALL include `recipients_verified: false` and a `recipients_diff` JSON object (`{"cc":{"expected":[…],"found":[…]},"bcc":{…}}`) listing, per field, the expected and found addresses; the draft SHALL be kept, and the call SHALL NOT be reported as failed. When the receipt script itself cannot run (timeout, Automation refusal, runtime error), the result SHALL include `recipients_verified: false` and `recipients_receipt: unavailable` with the reason, SHALL NOT claim the draft was not found, and SHALL NOT retry the failed script (only a not-found result is polled, because the save can land asynchronously). The AX token read-back and this receipt are both required: the read-back proves the fill landed, the receipt proves the addresses Mail stored.
+When a draft was created with any display-name `cc` or `bcc` recipient, then after the save keystroke the system SHALL locate the new draft in the drafts mailbox by exact subject match (the same subject-match strategy as `update_draft`'s post-create id receipt — currently two independent reads; merging them is tracked in #409), read the address of every cc recipient and every bcc recipient, and compare each set with the addresses the caller supplied. When both sets match, the result SHALL include `recipients_verified: true`. When either set differs, or the draft cannot be located, the result SHALL include `recipients_verified: false` and a `recipients_diff` JSON object (`{"cc":{"expected":[…],"found":[…]},"bcc":{…}}`) listing, per field, the expected and found addresses; the draft SHALL be kept, and the call SHALL NOT be reported as failed. When the receipt script itself cannot run (timeout, Automation refusal, runtime error), the result SHALL include `recipients_verified: false` and `recipients_receipt: unavailable` with the reason, SHALL NOT claim the draft was not found, and SHALL NOT retry the failed script (only a not-found result is polled, because the save can land asynchronously). The AX token read-back and this receipt are both required: the read-back proves the fill landed, the receipt proves the addresses Mail stored.
 
 `update_draft` SHALL gate its delete of the old draft on this receipt only after its post-create id receipt has confirmed the replacement exists: when the confirmed replacement's receipt reports a definitive mismatch, the old draft SHALL be kept and the result SHALL say `deleted_old: false` with a note that states what was observed, says the receipt identifies a draft by subject only, and SHALL NOT instruct the caller to delete anything; an unavailable or not-found receipt SHALL NOT gate the delete, and a phantom create SHALL keep being reported as unconfirmed rather than as a mismatch.
 
@@ -79,9 +79,15 @@ When a draft was created with any display-name `cc` or `bcc` recipient, then aft
 
 #### Scenario: update_draft keeps the old draft on a definitive mismatch
 
-- **WHEN** `update_draft` created its replacement and the replacement's receipt reports a mismatch
+- **WHEN** `update_draft` created its replacement, its post-create id receipt confirmed a new id, and the confirmed replacement's recipient receipt reports a definitive mismatch
 - **THEN** the old draft SHALL NOT be deleted
-- **AND** the result SHALL include `deleted_old: false` and a note naming the recipient mismatch
+- **AND** the result SHALL include `deleted_old: false` and a note naming the recipient mismatch, stating that two drafts MAY exist and that the receipt identifies a draft by subject only
+
+#### Scenario: update_draft reports a phantom create as unconfirmed, not as a mismatch
+
+- **WHEN** `update_draft`'s post-create id receipt finds no new id (phantom create), even though the recipient receipt read a same-subject draft whose addresses differ from the request
+- **THEN** the result SHALL say `deleted_old: false` with a "not confirmed" note
+- **AND** SHALL NOT report a recipient mismatch
 
 #### Scenario: Receipt not applicable to bare-address drafts
 

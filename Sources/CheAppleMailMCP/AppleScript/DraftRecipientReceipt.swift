@@ -16,9 +16,12 @@ struct RecipientReceipt: Equatable {
 /// and bcc addresses as `cc1␞cc2␝bcc1` (ASCII 30 between addresses, ASCII 29
 /// between the two lists); `NOTFOUND` when no draft carries the subject.
 ///
-/// Newest-id wins because `update_draft` keeps the old draft (same subject)
-/// until its own receipt confirms the replacement — the receipt must not read
-/// the old draft's recipients as if they were the new draft's. The subject
+/// Newest-id wins is a heuristic, not a guarantee: `update_draft` keeps the old
+/// draft (same subject) until its own receipt confirms the replacement, so the
+/// newest same-subject draft is USUALLY the replacement — but message ids are
+/// raw per-store ROWIDs that do not compare across accounts, and #405 shows an
+/// old draft can be re-saved under a higher id, so the receipt MAY read the old
+/// draft's recipients (PR #407 R3; a stronger identification is #409). The subject
 /// comparison runs under `considering case` for parity with the Swift `==`
 /// that `update_draft`'s receipt applies to `parseDraftRows`.
 func buildDraftRecipientReceiptScript(subject: String) -> String {

@@ -196,9 +196,11 @@ func buildMailtoComposeScript(
     // #404: handlers for the AX-addressed fill phase. `findAddressField` scans
     // the compose window's text fields for a stable AXIdentifier (indexed +
     // guarded, #295 — a for-in item-fetch throws -2700 on a settling AX tree);
-    // `findMenuItemNamed` scans every menu-bar menu for an item whose name
-    // contains one of the locale fragments (the View menu is "顯示方式" on a
-    // zh-TW Mail, "View" elsewhere — the item is matched, not the menu).
+    // `findMenuItemNamed` scans ONLY the View menu — the menu-bar item named
+    // "顯示方式" (zh-TW Mail) or "View" (English Mail); other UI languages fail
+    // cleanly with BCCREVEAL naming that limit (PR #407 R1 #10 / R2-8) — for an
+    // item whose name contains one of the locale fragments: the menu is matched
+    // by name, the item by fragment.
     let fillHandlers = fill.isEmpty ? "" : """
     on findAddressField(_w, _idf)
         tell application "System Events"
@@ -712,7 +714,8 @@ func buildMailtoComposeScript(
                 end repeat
             end tell
             set _leftOpenReason to "its discard sheet could not be dismissed"
-            if _titleMatches is not 1 then set _leftOpenReason to "cleanup refused to dismiss its discard sheet because " & _titleMatches & " windows carry this subject and only one can be ours"
+            if _titleMatches is greater than 1 then set _leftOpenReason to "cleanup refused to dismiss its discard sheet because " & _titleMatches & " windows carry this subject and only one can be ours"
+            if _titleMatches is 0 then set _leftOpenReason to "no window carrying this subject was visible to System Events, so nothing was clicked"
             if _stillOpen then set _mErr to (_mErr as text) & " — WINDOWLEFTOPEN: the compose window titled \\"\(subjEsc)\\" was left open (" & _leftOpenReason & "); close it in Mail before retrying"
     """
     // send:true handler: three branches, all rethrow — sentinel-marked errors

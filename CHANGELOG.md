@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clicked and the field polled until present; the menu state is *not* restored
   (restoring before the save is unverified for recipient loss, after the save
   there is no window to act on), so the result says `bcc_field_revealed: true`.
+  The reveal looks for its menu item only under a menu named 顯示方式 / View —
+  other Mail UI languages fail cleanly with `BCCREVEAL` and are not supported
+  yet.
 - **Post-save recipient receipt** (#404). A token exposes no address over AX, so
   when cc/bcc were GUI-filled the newest draft with the exact subject is re-read
   (`considering case`) and its cc/bcc addresses compared with the request. The
@@ -44,10 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports what was observed and never instructs a deletion) on a definitive
   mismatch; an unavailable or not-found receipt does not gate the delete, and a
   phantom create keeps being reported as unconfirmed. Known limit: the receipt
-  identifies a draft by subject only ([#409](https://github.com/PsychQuant/che-apple-mail-mcp/issues/409)).
-  The Bcc reveal looks for its menu item only under a menu named 顯示方式 /
-  View — other Mail UI languages fail cleanly with `BCCREVEAL` and are not
-  supported yet. The read-back name check applies to named recipients only — a
+  identifies a draft by subject only ([#409](https://github.com/PsychQuant/che-apple-mail-mcp/issues/409)). The read-back name check applies to named recipients only — a
   bare address's token is not name-compared because Mail renders a Contacts
   card's name there; the count stays strict. `DraftRecipientReceipt.swift`;
   `DraftRecipientReceiptTests`.

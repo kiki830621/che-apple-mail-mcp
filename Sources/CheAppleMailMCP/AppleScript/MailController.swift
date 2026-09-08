@@ -2052,11 +2052,12 @@ actor MailController {
                 "note": "the replacement draft was confirmed created, but the post-save recipient "
                     + "receipt read cc/bcc addresses that differ from the request "
                     + "(recipients_verified: false, see recipients_diff). The OLD draft (id \(old.id)) "
-                    + "was KEPT — it holds the previously verified recipients — so both drafts now "
-                    + "exist. Caveat: the receipt identifies a draft by subject only (newest id wins, "
+                    + "was KEPT — it holds the recipients the draft had before this call — so two "
+                    + "drafts MAY now exist (the id receipt can also be satisfied by a re-saved old "
+                    + "draft, #405). Caveat: the receipt identifies a draft by subject only (newest id wins, "
                     + "#409), so on a same-subject update it MAY have read the old draft rather than "
                     + "the replacement, and a bare address may differ only by server-side "
-                    + "normalization. Open both drafts in Mail and decide yourself which to keep; "
+                    + "normalization. Open the drafts in Mail and decide yourself which to keep; "
                     + "nothing was deleted.",
             ]
         }
