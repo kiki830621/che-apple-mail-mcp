@@ -14,5 +14,5 @@ enum AppVersion {
     /// Semantic version of the last released binary this source tree targets.
     /// Between releases it equals the newest CHANGELOG version; the release
     /// script bumps it in lockstep with the tag.
-    static let current = "3.0.0"
+    static let current = "3.1.0"
 }
